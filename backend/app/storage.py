@@ -36,7 +36,7 @@ class AuditLogger:
         chained_hash = sha256(
             f"{event.payload_hash}{previous_hash}".encode("utf-8")
         ).hexdigest()
-        payload = event.dict()
+        payload = event.model_dump()
         payload["payload_hash"] = chained_hash
         with self.audit_path.open("ab") as handle:
             handle.write(json.dumps(payload, default=str).encode("utf-8"))
@@ -61,12 +61,12 @@ class PatientVault:
         payload = encrypted_file.read_bytes()
         decrypted = fernet.decrypt(payload)
         data = json.loads(decrypted.decode("utf-8"))
-        return schemas.PatientRecord.parse_obj(data)
+        return schemas.PatientRecord.model_validate(data)
 
     def store(self, record: schemas.PatientRecord) -> None:
         _ensure_directory(self.base_path)
         fernet = Fernet(self.key_provider(record.profile.id))
-        payload = record.json().encode("utf-8")
+        payload = record.model_dump_json().encode("utf-8")
         encrypted = fernet.encrypt(payload)
         self._patient_file(record.profile.id).write_bytes(encrypted)
 

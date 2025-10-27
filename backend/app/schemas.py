@@ -65,8 +65,8 @@ class PatientRecord(BaseModel):
     """Complete patient record stored per patient."""
 
     profile: PatientProfile
-    appointments: List[AppointmentSlot] = []
-    treatment_notes: List[TreatmentNote] = []
+    appointments: List[AppointmentSlot] = Field(default_factory=list)
+    treatment_notes: List[TreatmentNote] = Field(default_factory=list)
     consents: List[str] = Field(
         default_factory=list,
         description="Identifiers of clinics that currently have access to the record.",
