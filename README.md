@@ -34,6 +34,30 @@ npm run dev
 Die React-Anwendung erwartet den API-Endpunkt unter `http://localhost:8000`. Dies lässt sich über die
 Umgebungsvariable `VITE_API_URL` anpassen.
 
+## Docker-Compose-Setup
+
+Für einen vollständig containerisierten Start existiert ein `docker-compose.yml`, das Backend und Frontend
+inklusive Health-Checks orchestriert.
+
+```bash
+# Erstaufbau und Start
+docker compose up --build
+
+# Stoppen (Container bleiben erhalten)
+docker compose down
+
+# Stoppen und Daten löschen (verschlüsselter Patient:innentresor wird zurückgesetzt)
+docker compose down -v
+```
+
+Die Dienste laufen anschließend unter folgenden Endpunkten:
+
+- Backend API: http://localhost:8000 (persistente Vault-Daten via Volume `backend-data`)
+- Frontend UI: http://localhost:5173 (greift intern auf `http://backend:8000` zu)
+
+Möchten Sie eine andere API-URL verwenden, kann `VITE_API_URL` in der `docker-compose.yml` oder über
+`docker compose run -e VITE_API_URL=…` überschrieben werden.
+
 ## Sicherheit und Compliance
 
 - **Verschlüsselung:** Jeder Patient erhält einen eigenen Fernet-Schlüssel, der getrennt vom Datentresor
