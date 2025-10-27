@@ -85,7 +85,20 @@ export default function App() {
         patient
       });
       setBookingState({ status: "success", confirmation });
-      setPatientRecord(await getPatientRecord({ patientId: patient.id }));
+      const bookedSlot = slots.find((slot) => slot.id === slotId);
+      const clinicIdForRecord = bookedSlot?.clinic_id ?? selectedClinic;
+
+      if (clinicIdForRecord) {
+        try {
+          const record = await getPatientRecord({
+            patientId: patient.id,
+            clinicId: clinicIdForRecord
+          });
+          setPatientRecord(record);
+        } catch (error) {
+          console.error("Failed to refresh patient record", error);
+        }
+      }
     } catch (error) {
       setBookingState({ status: "error", message: "Buchung fehlgeschlagen. Bitte erneut versuchen." });
     }
@@ -112,7 +125,26 @@ export default function App() {
           ? "Zugriff erfolgreich freigegeben."
           : "Zugriff wurde entzogen."
       );
-      setPatientRecord(await getPatientRecord({ patientId: patient.id }));
+      if (grant) {
+        try {
+          const record = await getPatientRecord({
+            patientId: patient.id,
+            clinicId
+          });
+          setPatientRecord(record);
+        } catch (error) {
+          console.error("Konnte aktualisierte Patientendaten nicht laden", error);
+        }
+      } else {
+        setPatientRecord((prev) =>
+          prev
+            ? {
+                ...prev,
+                consents: prev.consents.filter((consentId) => consentId !== clinicId)
+              }
+            : prev
+        );
+      }
     } catch (error) {
       setConsentMessage("Freigabe konnte nicht aktualisiert werden.");
     }

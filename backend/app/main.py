@@ -2,11 +2,12 @@
 from __future__ import annotations
 
 from datetime import datetime
+import hashlib
 from pathlib import Path
 from typing import Optional
 from uuid import uuid4
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 from . import schemas
@@ -68,6 +69,13 @@ def get_access_registry() -> AccessRegistry:
     return AccessRegistry(ACCESS_REQUESTS_PATH)
 
 
+def stable_hash(*components: str) -> str:
+    """Create a stable, reproducible hash for audit payloads."""
+
+    payload = "|".join(components)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 @app.get("/clinics", response_model=list[schemas.Clinic])
 async def list_clinics(catalog: AppointmentCatalog = Depends(get_catalog)) -> list[schemas.Clinic]:
     """List clinics that are available for booking."""
@@ -112,19 +120,28 @@ async def book_appointment(
         if appointment.id != slot.id
     ]
     record.appointments.append(slot)
-    vault.store(record)
 
-    payload_hash = str(hash(f"{request.patient.id}:{slot.id}:{datetime.utcnow().isoformat()}"))
+    event_timestamp = datetime.utcnow()
+    payload_hash = stable_hash(
+        request.patient.id,
+        slot.id,
+        event_timestamp.isoformat(),
+    )
     audit_logger.append(
         schemas.AuditEvent(
             id=str(uuid4()),
             actor=request.patient.id,
             action="book_appointment",
             patient_id=request.patient.id,
-            timestamp=datetime.utcnow(),
+            timestamp=event_timestamp,
             payload_hash=payload_hash,
         )
     )
+
+    if slot.clinic_id not in record.consents:
+        record.consents.append(slot.clinic_id)
+
+    vault.store(record)
 
     email_gateway.send_confirmation(
         to=request.patient.email,
@@ -166,14 +183,20 @@ async def add_treatment_note(
     record.treatment_notes.append(note)
     vault.store(record)
 
-    payload_hash = str(hash(f"{patient_id}:{note.version}:{note.summary}"))
+    event_timestamp = datetime.utcnow()
+    payload_hash = stable_hash(
+        patient_id,
+        str(note.version),
+        note.summary,
+        event_timestamp.isoformat(),
+    )
     audit_logger.append(
         schemas.AuditEvent(
             id=str(uuid4()),
             actor=payload.author,
             action="add_treatment_note",
             patient_id=patient_id,
-            timestamp=datetime.utcnow(),
+            timestamp=event_timestamp,
             payload_hash=payload_hash,
         )
     )
@@ -212,14 +235,20 @@ async def update_consent(
         )
     )
 
-    payload_hash = str(hash(f"{patient_id}:{payload.requester_clinic_id}:{payload.grant}"))
+    event_timestamp = datetime.utcnow()
+    payload_hash = stable_hash(
+        patient_id,
+        payload.requester_clinic_id,
+        str(payload.grant),
+        event_timestamp.isoformat(),
+    )
     audit_logger.append(
         schemas.AuditEvent(
             id=str(uuid4()),
             actor=payload.requester_clinic_id,
             action="update_consent",
             patient_id=patient_id,
-            timestamp=datetime.utcnow(),
+            timestamp=event_timestamp,
             payload_hash=payload_hash,
         )
     )
@@ -234,7 +263,10 @@ async def update_consent(
 @app.get("/patients/{patient_id}", response_model=schemas.PatientRecord)
 async def get_patient_record(
     patient_id: str,
-    requester_clinic_id: Optional[str] = None,
+    requester_clinic_id: str = Query(
+        ...,
+        description="Clinic identifier requesting access to the patient record.",
+    ),
     vault: PatientVault = Depends(get_vault),
     audit_logger: AuditLogger = Depends(get_audit_logger),
 ) -> schemas.PatientRecord:
@@ -244,17 +276,22 @@ async def get_patient_record(
     if record is None:
         raise HTTPException(status_code=404, detail="Patient record not found")
 
-    if requester_clinic_id and requester_clinic_id not in record.consents:
+    if requester_clinic_id not in record.consents:
         raise HTTPException(status_code=403, detail="Access not granted by patient")
 
-    payload_hash = str(hash(f"{patient_id}:{requester_clinic_id}:{datetime.utcnow().isoformat()}"))
+    event_timestamp = datetime.utcnow()
+    payload_hash = stable_hash(
+        patient_id,
+        requester_clinic_id,
+        event_timestamp.isoformat(),
+    )
     audit_logger.append(
         schemas.AuditEvent(
             id=str(uuid4()),
-            actor=requester_clinic_id or "patient",
+            actor=requester_clinic_id,
             action="get_patient_record",
             patient_id=patient_id,
-            timestamp=datetime.utcnow(),
+            timestamp=event_timestamp,
             payload_hash=payload_hash,
         )
     )

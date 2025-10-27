@@ -23,8 +23,12 @@ export const bookAppointment = async (payload) => {
 };
 
 export const getPatientRecord = async ({ patientId, clinicId }) => {
+  if (!clinicId) {
+    throw new Error("clinicId is required to access a patient record");
+  }
+
   const { data } = await client.get(`/patients/${patientId}`, {
-    params: clinicId ? { requester_clinic_id: clinicId } : {}
+    params: { requester_clinic_id: clinicId }
   });
   return data;
 };
