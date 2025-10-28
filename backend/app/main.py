@@ -16,7 +16,10 @@ from .storage import (
     AccessRegistry,
     AppointmentRepository,
     AuditLogger,
+    DuplicateAccountError,
+    DuplicateEmailError,
     EmailGateway,
+    IdentityStoreError,
     Keyring,
     PatientAccessRequest,
     PatientVault,
@@ -78,7 +81,12 @@ def get_repository() -> AppointmentRepository:
 
 def get_user_directory() -> UserDirectory:
     directory = UserDirectory(IDENTITY_PATH)
-    directory.ensure_platform_admin()
+    try:
+        directory.ensure_platform_admin()
+    except IdentityStoreError as error:
+        raise HTTPException(
+            status_code=500, detail="Identitätsregister derzeit nicht verfügbar"
+        ) from error
     return directory
 
 
@@ -128,8 +136,12 @@ async def register_patient(
 ) -> schemas.AuthToken:
     try:
         account = users.create_patient(payload)
-    except ValueError as error:
-        raise HTTPException(status_code=400, detail=str(error))
+    except (DuplicateEmailError, DuplicateAccountError) as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except IdentityStoreError as error:
+        raise HTTPException(
+            status_code=500, detail="Identitätsregister derzeit nicht verfügbar"
+        ) from error
     token = sessions.issue(account.id)
     return schemas.AuthToken(token=token, user=to_public(account))
 
@@ -172,8 +184,12 @@ async def register_clinic(
             password=payload.admin_password,
             display_name=payload.admin_display_name,
         )
-    except ValueError as error:
-        raise HTTPException(status_code=400, detail=str(error))
+    except (DuplicateEmailError, DuplicateAccountError) as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except IdentityStoreError as error:
+        raise HTTPException(
+            status_code=500, detail="Identitätsregister derzeit nicht verfügbar"
+        ) from error
     return schemas.ClinicRegistrationResponse(
         clinic=clinic,
         admin=to_public(account),
@@ -202,8 +218,12 @@ async def register_provider(
             display_name=payload.display_name,
             specialty=payload.specialty,
         )
-    except ValueError as error:
-        raise HTTPException(status_code=400, detail=str(error))
+    except (DuplicateEmailError, DuplicateAccountError) as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except IdentityStoreError as error:
+        raise HTTPException(
+            status_code=500, detail="Identitätsregister derzeit nicht verfügbar"
+        ) from error
     return schemas.ProviderProfile(
         id=account.id,
         display_name=account.display_name,

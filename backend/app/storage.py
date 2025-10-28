@@ -21,6 +21,18 @@ def _ensure_directory(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
 
 
+class IdentityStoreError(Exception):
+    """Base error for identity persistence issues."""
+
+
+class DuplicateAccountError(IdentityStoreError):
+    """Raised when an identifier collision occurs in the identity registry."""
+
+
+class DuplicateEmailError(IdentityStoreError):
+    """Raised when attempting to register an email that already exists."""
+
+
 @dataclass
 class AuditLogger:
     """Append-only audit trail with hash chaining."""
@@ -427,10 +439,16 @@ class UserDirectory:
             self.path.write_text(json.dumps(payload, indent=2))
 
     def _load(self) -> dict:
-        return json.loads(self.path.read_text())
+        try:
+            return json.loads(self.path.read_text())
+        except json.JSONDecodeError as error:
+            raise IdentityStoreError("Identitätsregister beschädigt") from error
 
     def _persist(self, payload: dict) -> None:
         self.path.write_text(json.dumps(payload, indent=2))
+
+    def _normalize_email(self, email: str) -> str:
+        return email.strip().lower()
 
     def _hash_password(self, password: str) -> tuple[str, str]:
         salt_bytes = secrets.token_bytes(16)
@@ -446,7 +464,7 @@ class UserDirectory:
     def _hydrate(self, raw: dict) -> UserAccount:
         return UserAccount(
             id=raw["id"],
-            email=raw["email"],
+            email=self._normalize_email(raw["email"]),
             role=schemas.UserRole(raw["role"]),
             display_name=raw["display_name"],
             password_hash=raw["password_hash"],
@@ -483,18 +501,29 @@ class UserDirectory:
         return [self._hydrate(item) for item in data.get("users", [])]
 
     def get_by_email(self, email: str) -> Optional[UserAccount]:
-        return next((user for user in self._all_accounts() if user.email == email), None)
+        normalized = self._normalize_email(email)
+        return next(
+            (
+                user
+                for user in self._all_accounts()
+                if self._normalize_email(user.email) == normalized
+            ),
+            None,
+        )
 
     def get(self, user_id: str) -> Optional[UserAccount]:
         return next((user for user in self._all_accounts() if user.id == user_id), None)
 
     def add(self, account: UserAccount) -> UserAccount:
         data = self._load()
-        if any(existing["id"] == account.id for existing in data.get("users", [])):
-            raise ValueError("User identifier already exists")
-        if any(existing["email"] == account.email for existing in data.get("users", [])):
-            raise ValueError("Email already registered")
-        data.setdefault("users", []).append(self._dump(account))
+        users = data.setdefault("users", [])
+        normalized_email = self._normalize_email(account.email)
+        for existing in users:
+            if existing["id"] == account.id:
+                raise DuplicateAccountError("Benutzerkennung bereits vergeben")
+            if self._normalize_email(existing["email"]) == normalized_email:
+                raise DuplicateEmailError("E-Mail-Adresse bereits registriert")
+        users.append(self._dump(account))
         self._persist(data)
         return account
 
@@ -508,16 +537,17 @@ class UserDirectory:
     def create_patient(self, registration: schemas.PatientRegistration) -> UserAccount:
         password_hash, salt = self._hash_password(registration.password)
         patient_id = self._generate_patient_id()
+        normalized_email = self._normalize_email(registration.email)
         profile = schemas.PatientProfile(
             id=patient_id,
-            email=registration.email,
+            email=normalized_email,
             first_name=registration.first_name,
             last_name=registration.last_name,
             date_of_birth=registration.date_of_birth,
         )
         account = UserAccount(
             id=patient_id,
-            email=registration.email,
+            email=normalized_email,
             role=schemas.UserRole.patient,
             display_name=f"{registration.first_name} {registration.last_name}",
             password_hash=password_hash,
@@ -532,7 +562,7 @@ class UserDirectory:
         password_hash, salt = self._hash_password(password)
         account = UserAccount(
             id=f"admin-{clinic_id}",
-            email=email,
+            email=self._normalize_email(email),
             role=schemas.UserRole.clinic_admin,
             display_name=display_name,
             password_hash=password_hash,
@@ -553,7 +583,7 @@ class UserDirectory:
         password_hash, salt = self._hash_password(password)
         account = UserAccount(
             id=f"provider-{uuid4().hex[:8]}",
-            email=email,
+            email=self._normalize_email(email),
             role=schemas.UserRole.provider,
             display_name=display_name,
             password_hash=password_hash,
@@ -577,7 +607,7 @@ class UserDirectory:
         password_hash, salt = self._hash_password("PattermAdmin!2024")
         account = UserAccount(
             id="platform-admin",
-            email="admin@patterm.io",
+            email=self._normalize_email("admin@patterm.io"),
             role=schemas.UserRole.platform_admin,
             display_name="Patterm Platform Admin",
             password_hash=password_hash,
@@ -586,7 +616,7 @@ class UserDirectory:
         return self.add(account)
 
     def authenticate(self, email: str, password: str) -> Optional[UserAccount]:
-        account = self.get_by_email(email)
+        account = self.get_by_email(self._normalize_email(email))
         if not account:
             return None
         digest = self._hash_with_salt(password, account.salt)

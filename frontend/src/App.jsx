@@ -281,7 +281,8 @@ export default function App() {
       handleAuthSuccess(auth);
       setAuthMode("login");
     } catch (error) {
-      setAuthError("Registrierung fehlgeschlagen. Bitte Angaben prüfen.");
+      const detail = error?.response?.data?.detail;
+      setAuthError(detail ?? "Registrierung fehlgeschlagen. Bitte Angaben prüfen.");
     } finally {
       setPendingAuth(false);
     }
@@ -389,7 +390,10 @@ export default function App() {
       const updated = await getClinics();
       setClinics(updated);
     } catch (error) {
-      setAdminFeedback("Klinik konnte nicht registriert werden.");
+      const detail = error?.response?.data?.detail;
+      setAdminFeedback(
+        detail ?? "Klinik konnte nicht registriert werden."
+      );
     }
   };
 
@@ -408,7 +412,8 @@ export default function App() {
       event.currentTarget.reset();
       await refreshMedicalData();
     } catch (error) {
-      setProviderFeedback("Registrierung fehlgeschlagen.");
+      const detail = error?.response?.data?.detail;
+      setProviderFeedback(detail ?? "Registrierung fehlgeschlagen.");
     }
   };
 
