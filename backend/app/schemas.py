@@ -30,8 +30,12 @@ class OpeningHours(BaseModel):
     weekday: int = Field(
         ..., ge=0, le=6, description="Weekday number where Monday is 0 and Sunday is 6"
     )
-    opens_at: str = Field(..., regex=r"^\d{2}:\d{2}$", description="Opening time HH:MM")
-    closes_at: str = Field(..., regex=r"^\d{2}:\d{2}$", description="Closing time HH:MM")
+    opens_at: str = Field(
+        ..., pattern=r"^\d{2}:\d{2}$", description="Opening time HH:MM"
+    )
+    closes_at: str = Field(
+        ..., pattern=r"^\d{2}:\d{2}$", description="Closing time HH:MM"
+    )
 
 
 class ClinicDepartment(BaseModel):
