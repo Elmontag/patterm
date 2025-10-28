@@ -28,6 +28,14 @@ class Clinic(BaseModel):
     contact_email: EmailStr
 
 
+class SlotStatus(str, Enum):
+    """Lifecycle status of appointment slots."""
+
+    open = "open"
+    booked = "booked"
+    cancelled = "cancelled"
+
+
 class AppointmentSlot(BaseModel):
     """A bookable appointment slot."""
 
@@ -38,6 +46,17 @@ class AppointmentSlot(BaseModel):
     is_virtual: bool = Field(
         False,
         description="Whether the appointment takes place virtually (telemedicine)",
+    )
+    status: SlotStatus = Field(default=SlotStatus.open, description="Lifecycle status of the slot")
+    booked_patient_id: Optional[str] = Field(
+        default=None, description="Identifier of the patient who booked the slot"
+    )
+    patient_snapshot: Optional["PatientProfile"] = Field(
+        default=None,
+        description=(
+            "Patient profile snapshot shared with the treating clinic when the slot is "
+            "booked, based on explicit consent."
+        ),
     )
 
 
@@ -76,7 +95,6 @@ class PatientRecord(BaseModel):
 class AppointmentRequest(BaseModel):
     """Incoming booking request."""
 
-    patient: PatientProfile
     slot_id: str
 
 
@@ -123,3 +141,104 @@ class AuditEvent(BaseModel):
     patient_id: Optional[str]
     timestamp: datetime
     payload_hash: str
+
+
+class UserRole(str, Enum):
+    """Supported roles for fine-grained authorization."""
+
+    patient = "patient"
+    clinic_admin = "clinic_admin"
+    provider = "provider"
+    platform_admin = "platform_admin"
+
+
+class UserPublicProfile(BaseModel):
+    """Public representation of an authenticated user."""
+
+    id: str
+    email: EmailStr
+    role: UserRole
+    display_name: str
+    clinic_id: Optional[str] = None
+
+
+class LoginRequest(BaseModel):
+    """Credentials for issuing an authentication token."""
+
+    email: EmailStr
+    password: str
+
+
+class AuthToken(BaseModel):
+    """Returned session token and accompanying profile."""
+
+    token: str
+    user: UserPublicProfile
+
+
+class PatientRegistration(BaseModel):
+    """Payload to create a new patient account."""
+
+    patient_id: str = Field(..., description="Unique identifier chosen by the patient")
+    email: EmailStr
+    password: str
+    first_name: str
+    last_name: str
+    date_of_birth: date
+
+
+class ClinicRegistration(BaseModel):
+    """Administrative payload to onboard a new clinic and its lead user."""
+
+    clinic: Clinic
+    admin_email: EmailStr
+    admin_password: str
+    admin_display_name: str
+
+
+class ProviderRegistration(BaseModel):
+    """Registration payload for a clinician tied to a clinic."""
+
+    clinic_id: str
+    email: EmailStr
+    password: str
+    display_name: str
+    specialty: Specialty
+
+
+class SlotCreationRequest(BaseModel):
+    """Payload for clinics to create new appointment slots."""
+
+    start: datetime
+    end: datetime
+    is_virtual: bool = False
+
+
+class SlotUpdateRequest(BaseModel):
+    """Payload for updating slot metadata."""
+
+    start: Optional[datetime] = None
+    end: Optional[datetime] = None
+    is_virtual: Optional[bool] = None
+
+
+class RescheduleRequest(BaseModel):
+    """Patient-initiated reschedule payload."""
+
+    new_slot_id: str
+
+
+class ClinicBooking(BaseModel):
+    """Booking information surfaced to clinics with patient consent."""
+
+    slot: AppointmentSlot
+    patient: Optional[PatientProfile]
+
+
+class ProviderProfile(BaseModel):
+    """Profile data returned for clinicians within a clinic."""
+
+    id: str
+    display_name: str
+    email: EmailStr
+    specialty: Specialty
