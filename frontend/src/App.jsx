@@ -1071,7 +1071,7 @@ export default function App() {
                           <p className="text-slate-600">{provider.email}</p>
                           <p className="text-slate-500 text-xs">{provider.specialty}</p>
                         </div>
-                      ))}
+                      ))
                     )}
                   </div>
                 </div>
