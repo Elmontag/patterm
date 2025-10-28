@@ -261,10 +261,6 @@ export default function App() {
     }
   }, [user?.role, specialtyCatalog]);
 
-  useEffect(() => {
-    void refreshAdminFacilities();
-  }, [refreshAdminFacilities]);
-
   const cacheFacilityDetail = useCallback((detail) => {
     if (!detail) return detail;
     setFacilityDetailCache((prev) => ({ ...prev, [detail.id]: detail }));
@@ -285,6 +281,10 @@ export default function App() {
       setAdminFacilities([]);
     }
   }, [token, user?.role]);
+
+  useEffect(() => {
+    void refreshAdminFacilities();
+  }, [refreshAdminFacilities]);
 
   const prepareAdminFacilityForm = useCallback((facility) => {
     if (!facility) {
