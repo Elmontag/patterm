@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import AppointmentCard from "./components/AppointmentCard.jsx";
 import ComplianceNotice from "./components/ComplianceNotice.jsx";
 import ConsentBadge from "./components/ConsentBadge.jsx";
@@ -12,7 +12,9 @@ import {
   getClinicBookings,
   getClinicProviders,
   getClinicSlots,
-  getClinics,
+  getFacilities,
+  getFacilityDetail,
+  getFacilityProfile,
   getOwnRecord,
   login,
   registerClinic,
@@ -20,9 +22,12 @@ import {
   registerProvider,
   reschedulePatientAppointment,
   searchAppointments,
+  searchFacilities,
   setAuthToken,
   updateClinicSlot,
-  updateConsent
+  updateConsent,
+  updateFacilityProfile,
+  updateProfile
 } from "./hooks/useApi.js";
 
 const specialties = [
@@ -33,6 +38,19 @@ const specialties = [
   { value: "orthopedics", label: "Orthopädie" },
   { value: "pediatrics", label: "Pädiatrie" }
 ];
+
+const facilityTypes = [
+  { value: "", label: "Alle Einrichtungstypen" },
+  { value: "clinic", label: "Klinik" },
+  { value: "practice", label: "Praxis" },
+  { value: "group_practice", label: "Gemeinschaftspraxis" }
+];
+
+const facilityTypeLabels = {
+  clinic: "Klinik",
+  practice: "Praxis",
+  group_practice: "Gemeinschaftspraxis"
+};
 
 const readToken = () => localStorage.getItem("patterm:token") ?? "";
 const readUser = () => {
@@ -50,6 +68,57 @@ const formatDateTime = (iso) =>
     dateStyle: "long",
     timeStyle: "short"
   });
+
+const weekdayLookup = {
+  mo: 0,
+  di: 1,
+  mi: 2,
+  do: 3,
+  fr: 4,
+  sa: 5,
+  so: 6
+};
+
+const weekdayKeys = ["mo", "di", "mi", "do", "fr", "sa", "so"];
+
+const parseOpeningHours = (value) => {
+  if (!value) return [];
+  return value
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const [dayPart, timePart] = line.split(":");
+      if (!dayPart || !timePart) return null;
+      const weekday = weekdayLookup[dayPart.toLowerCase().slice(0, 2)];
+      const [opens_at, closes_at] = timePart.split("-").map((segment) => segment.trim());
+      if (weekday === undefined || !opens_at || !closes_at) return null;
+      return { weekday, opens_at, closes_at };
+    })
+    .filter(Boolean);
+};
+
+const parseListInput = (value) =>
+  value
+    .split(/[,\n]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+
+const parseDepartments = (value) => {
+  if (!value) return [];
+  return value
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const [name, specialtiesRaw] = line.split(":");
+      return {
+        name: name?.trim() ?? "",
+        specialties: parseListInput(specialtiesRaw ?? "")
+      };
+    })
+    .filter((entry) => entry.name);
+};
 
 function FooterPlaceholder() {
   return (
@@ -69,8 +138,15 @@ function FooterPlaceholder() {
 export default function App() {
   const [token, setToken] = useState(readToken);
   const [user, setUser] = useState(readUser);
-  const [clinics, setClinics] = useState([]);
-  const [searchFilters, setSearchFilters] = useState({ clinicId: "", specialty: "" });
+  const [facilitySummaries, setFacilitySummaries] = useState([]);
+  const [facilityDetailCache, setFacilityDetailCache] = useState({});
+  const [searchFilters, setSearchFilters] = useState({
+    facilityId: "",
+    specialty: "",
+    providerId: "",
+    departmentId: "",
+    facilityType: ""
+  });
   const [slots, setSlots] = useState([]);
   const [searching, setSearching] = useState(false);
   const [patientRecord, setPatientRecord] = useState(null);
@@ -85,6 +161,16 @@ export default function App() {
   const [clinicPatientId, setClinicPatientId] = useState("");
   const [clinicPatientRecord, setClinicPatientRecord] = useState(null);
   const [clinicPatientError, setClinicPatientError] = useState("");
+  const [facilityResults, setFacilityResults] = useState([]);
+  const [facilitySearch, setFacilitySearch] = useState({
+    postalCode: "",
+    city: "",
+    specialty: "",
+    facilityType: ""
+  });
+  const [facilityProfile, setFacilityProfile] = useState(null);
+  const [profileMessage, setProfileMessage] = useState("");
+  const [facilityMessage, setFacilityMessage] = useState("");
   const [authError, setAuthError] = useState("");
   const [authMode, setAuthMode] = useState("login");
   const [pendingAuth, setPendingAuth] = useState(false);
@@ -95,20 +181,49 @@ export default function App() {
   useEffect(() => {
     const initialise = async () => {
       try {
-        const data = await getClinics();
-        setClinics(data);
+        const data = await getFacilities();
+        setFacilitySummaries(data);
       } catch (error) {
-        setClinics([]);
+        setFacilitySummaries([]);
       }
     };
     initialise();
   }, []);
 
+  const cacheFacilityDetail = useCallback((detail) => {
+    if (!detail) return detail;
+    setFacilityDetailCache((prev) => ({ ...prev, [detail.id]: detail }));
+    return detail;
+  }, []);
+
+  const ensureFacilityDetail = useCallback(
+    async (facilityId) => {
+      if (!facilityId) return null;
+      if (facilityDetailCache[facilityId]) {
+        return facilityDetailCache[facilityId];
+      }
+      try {
+        const detail = await getFacilityDetail(facilityId);
+        return cacheFacilityDetail(detail);
+      } catch (error) {
+        return null;
+      }
+    },
+    [cacheFacilityDetail, facilityDetailCache]
+  );
+
   useEffect(() => {
-    if (clinics.length > 0 && !searchFilters.clinicId) {
-      setSearchFilters((prev) => ({ ...prev, clinicId: clinics[0].id }));
+    if (filteredFacilities.length > 0 && !searchFilters.facilityId) {
+      const initial = filteredFacilities[0];
+      setSearchFilters((prev) => ({
+        ...prev,
+        facilityId: initial.id,
+        facilityType: prev.facilityType || initial.facility_type,
+        specialty: prev.specialty || initial.specialties?.[0] || "",
+      }));
+      void ensureFacilityDetail(initial.id);
     }
-  }, [clinics, searchFilters.clinicId]);
+  }, [filteredFacilities, searchFilters.facilityId, ensureFacilityDetail]);
 
   useEffect(() => {
     if (!token) {
@@ -146,11 +261,82 @@ export default function App() {
     }
   }, [user]);
 
-  const clinicLookup = useMemo(() => {
+  const facilityLookup = useMemo(() => {
     const map = new Map();
-    clinics.forEach((clinic) => map.set(clinic.id, clinic));
+    facilitySummaries.forEach((facility) => map.set(facility.id, facility));
+    Object.values(facilityDetailCache).forEach((facility) =>
+      map.set(facility.id, facility)
+    );
+    facilityResults.forEach((entry) => map.set(entry.facility.id, entry.facility));
+    if (facilityProfile) {
+      map.set(facilityProfile.id, facilityProfile);
+    }
     return map;
-  }, [clinics]);
+  }, [facilitySummaries, facilityDetailCache, facilityResults, facilityProfile]);
+
+  const filteredFacilities = useMemo(() => {
+    if (!searchFilters.facilityType) {
+      return facilitySummaries;
+    }
+    return facilitySummaries.filter(
+      (facility) => facility.facility_type === searchFilters.facilityType
+    );
+  }, [facilitySummaries, searchFilters.facilityType]);
+
+  const selectedFacility = searchFilters.facilityId
+    ? facilityLookup.get(searchFilters.facilityId)
+    : null;
+
+  const departmentOptions = useMemo(() => {
+    if (!selectedFacility || selectedFacility.facility_type !== "clinic") {
+      return [];
+    }
+    return selectedFacility.departments ?? [];
+  }, [selectedFacility]);
+
+  const providerOptions = useMemo(() => {
+    if (!selectedFacility) {
+      return [];
+    }
+    let providers = selectedFacility.providers ?? [];
+    if (
+      selectedFacility.facility_type === "clinic" &&
+      searchFilters.departmentId
+    ) {
+      const department = selectedFacility.departments?.find(
+        (entry) => entry.id === searchFilters.departmentId
+      );
+      if (department?.providers?.length) {
+        providers = department.providers;
+      } else if (department?.provider_ids?.length) {
+        providers = providers.filter((provider) =>
+          department.provider_ids.includes(provider.id)
+        );
+      }
+    }
+    return providers;
+  }, [selectedFacility, searchFilters.departmentId]);
+
+  const specialtyOptions = useMemo(() => {
+    if (selectedFacility?.specialties?.length) {
+      const labelMap = new Map(
+        specialties.map((option) => [option.value, option.label])
+      );
+      const firstOption =
+        specialties.find((option) => option.value === "") ?? {
+          value: "",
+          label: "Alle Fachrichtungen",
+        };
+      const unique = [];
+      selectedFacility.specialties.forEach((value) => {
+        if (!unique.some((entry) => entry.value === value)) {
+          unique.push({ value, label: labelMap.get(value) ?? value });
+        }
+      });
+      return [firstOption, ...unique];
+    }
+    return specialties;
+  }, [selectedFacility]);
 
   const handleAuthSuccess = (auth) => {
     setToken(auth.token);
@@ -168,6 +354,7 @@ export default function App() {
     setProviders([]);
     setClinicPatientRecord(null);
     setClinicPatientId("");
+    setFacilityProfile(null);
     setAuthToken();
     localStorage.removeItem("patterm:token");
     localStorage.removeItem("patterm:user");
@@ -195,13 +382,23 @@ export default function App() {
       setMedicalSlots(slotsData);
       setMedicalBookings(bookingsData);
       if (user.role === "clinic_admin") {
-        const providerData = await getClinicProviders();
+        const [providerData, facilityData] = await Promise.all([
+          getClinicProviders(),
+          getFacilityProfile()
+        ]);
         setProviders(providerData);
+        setFacilityProfile(facilityData);
+        cacheFacilityDetail(facilityData);
+      } else {
+        const facilityData = await getFacilityProfile();
+        setFacilityProfile(facilityData);
+        cacheFacilityDetail(facilityData);
       }
     } catch (error) {
       setMedicalSlots([]);
       setMedicalBookings([]);
       setProviders([]);
+      setFacilityProfile(null);
     }
   };
 
@@ -210,15 +407,72 @@ export default function App() {
     setSearching(true);
     try {
       const params = {};
-      if (searchFilters.clinicId) params.clinic_id = searchFilters.clinicId;
+      if (searchFilters.facilityId) params.facility_id = searchFilters.facilityId;
       if (searchFilters.specialty) params.specialty = searchFilters.specialty;
+      if (searchFilters.providerId) params.provider_id = searchFilters.providerId;
+      if (searchFilters.departmentId) params.department_id = searchFilters.departmentId;
+      if (searchFilters.facilityType) params.facility_type = searchFilters.facilityType;
       const results = await searchAppointments(params);
       setSlots(results);
+      results.forEach((slot) => void ensureFacilityDetail(slot.facility_id));
     } catch (error) {
       setSlots([]);
     } finally {
       setSearching(false);
     }
+  };
+
+  const handleFacilityTypeChange = (event) => {
+    const value = event.target.value;
+    setSearchFilters((prev) => ({
+      ...prev,
+      facilityType: value,
+      facilityId: "",
+      departmentId: "",
+      providerId: "",
+    }));
+  };
+
+  const handleFacilityChange = async (event) => {
+    const value = event.target.value;
+    if (!value) {
+      setSearchFilters((prev) => ({
+        ...prev,
+        facilityId: "",
+        departmentId: "",
+        providerId: "",
+      }));
+      return;
+    }
+    const detail = await ensureFacilityDetail(value);
+    const summary =
+      facilitySummaries.find((entry) => entry.id === value) ||
+      facilityLookup.get(value);
+    const facilityType = detail?.facility_type ?? summary?.facility_type ?? "";
+    const firstSpecialty =
+      detail?.specialties?.[0] ?? summary?.specialties?.[0] ?? "";
+    setSearchFilters((prev) => ({
+      ...prev,
+      facilityId: value,
+      facilityType: facilityType || prev.facilityType,
+      departmentId: "",
+      providerId: "",
+      specialty: firstSpecialty || "",
+    }));
+  };
+
+  const handleDepartmentChange = (event) => {
+    const value = event.target.value;
+    setSearchFilters((prev) => ({
+      ...prev,
+      departmentId: value,
+      providerId: "",
+    }));
+  };
+
+  const handleProviderChange = (event) => {
+    const value = event.target.value;
+    setSearchFilters((prev) => ({ ...prev, providerId: value }));
   };
 
   const handleBook = async (slotId) => {
@@ -241,6 +495,86 @@ export default function App() {
     }
   };
 
+  const handleFacilitySearch = async (event) => {
+    event.preventDefault();
+    try {
+      const params = {};
+      if (facilitySearch.postalCode) params.postal_code = facilitySearch.postalCode;
+      if (facilitySearch.city) params.city = facilitySearch.city;
+      if (facilitySearch.specialty) params.specialty = facilitySearch.specialty;
+      if (facilitySearch.facilityType) params.facility_type = facilitySearch.facilityType;
+      const results = await searchFacilities(params);
+      results.forEach((entry) => cacheFacilityDetail(entry.facility));
+      setFacilityResults(results);
+    } catch (error) {
+      setFacilityResults([]);
+    }
+  };
+
+  const loadFacilitySlots = async (facility) => {
+    const detail = await ensureFacilityDetail(facility.id);
+    const defaultSpecialty =
+      detail?.specialties?.[0] || facility.specialties?.[0] || "";
+    setSearchFilters((prev) => ({
+      ...prev,
+      facilityId: facility.id,
+      facilityType: facility.facility_type,
+      specialty: defaultSpecialty,
+      departmentId: "",
+      providerId: ""
+    }));
+    setSearching(true);
+    try {
+      const results = await searchAppointments({ facility_id: facility.id });
+      setSlots(results);
+      results.forEach((slot) => void ensureFacilityDetail(slot.facility_id));
+    } catch (error) {
+      setSlots([]);
+    } finally {
+      setSearching(false);
+    }
+  };
+
+  const handleFacilityUpdate = async (event) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    try {
+      await updateFacilityProfile({
+        contact_email: form.get("facility_email") || undefined,
+        phone_number: form.get("facility_phone") || undefined,
+        street: form.get("facility_street") || undefined,
+        city: form.get("facility_city") || undefined,
+        postal_code: form.get("facility_postal") || undefined,
+        opening_hours: parseOpeningHours(form.get("facility_hours")),
+        owners: parseListInput(form.get("facility_owners"))
+      });
+      setFacilityMessage("Einrichtung aktualisiert.");
+      await refreshMedicalData();
+    } catch (error) {
+      setFacilityMessage("Aktualisierung fehlgeschlagen.");
+    }
+  };
+
+  const handleProfileUpdate = async (event) => {
+    event.preventDefault();
+    const form = new FormData(event.currentTarget);
+    try {
+      await updateProfile({
+        display_name: form.get("display_name") || undefined,
+        phone_number: form.get("profile_phone") || undefined
+      });
+      setProfileMessage("Profil aktualisiert.");
+      if (user?.role === "patient") {
+        await refreshPatientRecord();
+      }
+      const refreshed = await fetchProfile();
+      setUser(refreshed);
+      localStorage.setItem("patterm:user", JSON.stringify(refreshed));
+    } catch (error) {
+      setProfileMessage("Profil konnte nicht aktualisiert werden.");
+    }
+  };
+
   const handleCancelAppointment = async (slotId) => {
     try {
       await cancelPatientAppointment(slotId);
@@ -251,12 +585,12 @@ export default function App() {
     }
   };
 
-  const handleConsentChange = async (clinicId, grant) => {
+  const handleConsentChange = async (facilityId, grant) => {
     if (!user) return;
     try {
       await updateConsent({
         patientId: user.id,
-        requesterClinicId: clinicId,
+        requesterFacilityId: facilityId,
         grant
       });
       setConsentMessage(grant ? "Zugriff freigegeben." : "Zugriff entzogen.");
@@ -276,7 +610,8 @@ export default function App() {
         password: form.get("password"),
         first_name: form.get("first_name"),
         last_name: form.get("last_name"),
-        date_of_birth: form.get("date_of_birth")
+        date_of_birth: form.get("date_of_birth"),
+        phone_number: form.get("phone_number")
       });
       handleAuthSuccess(auth);
       setAuthMode("login");
@@ -312,11 +647,15 @@ export default function App() {
     const start = form.get("start");
     const end = form.get("end");
     const isVirtual = form.get("is_virtual") === "on";
+    const providerId = form.get("slot_provider") || (user?.role === "provider" ? user.id : "");
+    const departmentId = form.get("slot_department") || undefined;
     try {
       await createClinicSlot({
         start: new Date(start).toISOString(),
         end: new Date(end).toISOString(),
-        is_virtual: isVirtual
+        is_virtual: isVirtual,
+        provider_id: providerId || undefined,
+        department_id: departmentId
       });
       event.currentTarget.reset();
       setAdminFeedback("Slot veröffentlicht.");
@@ -372,23 +711,42 @@ export default function App() {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     try {
+      const facilityType = form.get("facility_type");
+      const specialtiesRaw = form.getAll("clinic_specialties");
+      const specialties = specialtiesRaw.length > 0
+        ? specialtiesRaw.filter(Boolean)
+        : parseListInput(form.get("clinic_specialties") ?? "");
+      if (!facilityType) {
+        setAdminFeedback("Bitte Einrichtungstyp auswählen.");
+        return;
+      }
+      if (specialties.length === 0) {
+        setAdminFeedback("Mindestens ein Fach auswählen.");
+        return;
+      }
       const result = await registerClinic({
-        clinic: {
+        facility: {
           name: form.get("clinic_name"),
-          specialty: form.get("clinic_specialty"),
+          facility_type: facilityType,
+          specialties,
           city: form.get("clinic_city"),
           street: form.get("clinic_street"),
           postal_code: form.get("clinic_postal"),
-          contact_email: form.get("clinic_email")
+          contact_email: form.get("clinic_email"),
+          phone_number: form.get("clinic_phone"),
+          opening_hours: parseOpeningHours(form.get("clinic_hours"))
         },
+        departments: parseDepartments(form.get("clinic_departments")),
+        owners: parseListInput(form.get("facility_owners")),
         admin_email: form.get("admin_email"),
         admin_password: form.get("admin_password"),
         admin_display_name: form.get("admin_display")
       });
-      setAdminFeedback(`Klinik erfolgreich registriert. ID: ${result.clinic.id}`);
+      setAdminFeedback(`Einrichtung erfolgreich registriert. ID: ${result.facility.id}`);
       event.currentTarget.reset();
-      const updated = await getClinics();
-      setClinics(updated);
+      cacheFacilityDetail(result.facility);
+      const updated = await getFacilities();
+      setFacilitySummaries(updated);
     } catch (error) {
       const detail = error?.response?.data?.detail;
       setAdminFeedback(
@@ -401,12 +759,25 @@ export default function App() {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     try {
+      const specialtiesRaw = form.getAll("provider_specialties");
+      const specialties = specialtiesRaw.length > 0
+        ? specialtiesRaw.filter(Boolean)
+        : parseListInput(form.get("provider_specialties") ?? "");
+      if (!user?.facility_id) {
+        setProviderFeedback("Keine Einrichtung im Profil gefunden.");
+        return;
+      }
+      if (specialties.length === 0) {
+        setProviderFeedback("Bitte mindestens ein Fach auswählen.");
+        return;
+      }
       await registerProvider({
-        clinic_id: user?.clinic_id ?? "",
+        facility_id: user.facility_id,
         email: form.get("provider_email"),
         password: form.get("provider_password"),
         display_name: form.get("provider_name"),
-        specialty: form.get("provider_specialty")
+        specialties,
+        department_id: form.get("provider_department") || undefined
       });
       setProviderFeedback("Behandler:in angelegt.");
       event.currentTarget.reset();
@@ -423,7 +794,7 @@ export default function App() {
     try {
       const record = await fetchPatientRecordForClinic({
         patientId: clinicPatientId,
-        clinicId: user?.clinic_id ?? ""
+        clinicId: user?.facility_id ?? ""
       });
       setClinicPatientRecord(record);
       setClinicPatientError("");
@@ -434,7 +805,7 @@ export default function App() {
   };
 
   const patientAppointments = patientRecord?.appointments ?? [];
-  const consentedClinicIds = patientRecord?.consents ?? [];
+  const consentedFacilityIds = patientRecord?.consents ?? [];
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-sky-50 via-white to-blue-100">
@@ -572,6 +943,15 @@ export default function App() {
                       />
                     </label>
                     <label className="text-sm">
+                      <span className="text-xs font-semibold uppercase text-blue-700">Telefonnummer</span>
+                      <input
+                        name="phone_number"
+                        required
+                        className="mt-1 w-full rounded-lg border border-blue-200 bg-white px-3 py-2"
+                        placeholder="z. B. +49 30 123456"
+                      />
+                    </label>
+                    <label className="text-sm">
                       <span className="text-xs font-semibold uppercase text-blue-700">Passwort</span>
                       <input
                         name="password"
@@ -614,19 +994,64 @@ export default function App() {
                 Wählen Sie Fachrichtung und Standort. Freie Slots werden live aus dem
                 verschlüsselten Terminregister geladen.
               </p>
-              <form onSubmit={handleSearch} className="mt-4 grid gap-4 md:grid-cols-4">
+              <form onSubmit={handleSearch} className="mt-4 grid gap-4 md:grid-cols-5">
                 <label className="text-sm">
-                  <span className="text-xs font-semibold uppercase text-slate-500">Klinik</span>
+                  <span className="text-xs font-semibold uppercase text-slate-500">Einrichtungstyp</span>
                   <select
-                    value={searchFilters.clinicId}
-                    onChange={(event) =>
-                      setSearchFilters((prev) => ({ ...prev, clinicId: event.target.value }))
-                    }
+                    value={searchFilters.facilityType}
+                    onChange={handleFacilityTypeChange}
                     className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
                   >
-                    {clinics.map((clinic) => (
-                      <option key={clinic.id} value={clinic.id}>
-                        {clinic.name} · {clinic.city}
+                    {facilityTypes.map((type) => (
+                      <option key={type.value} value={type.value}>
+                        {type.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="text-sm md:col-span-2">
+                  <span className="text-xs font-semibold uppercase text-slate-500">Einrichtung</span>
+                  <select
+                    value={searchFilters.facilityId}
+                    onChange={handleFacilityChange}
+                    className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
+                  >
+                    <option value="">Alle Einrichtungen</option>
+                    {filteredFacilities.map((facility) => (
+                      <option key={facility.id} value={facility.id}>
+                        {facility.name} · {facility.city}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                {selectedFacility?.facility_type === "clinic" && (
+                  <label className="text-sm">
+                    <span className="text-xs font-semibold uppercase text-slate-500">Fachbereich</span>
+                    <select
+                      value={searchFilters.departmentId}
+                      onChange={handleDepartmentChange}
+                      className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
+                    >
+                      <option value="">Alle Fachbereiche</option>
+                      {departmentOptions.map((department) => (
+                        <option key={department.id} value={department.id}>
+                          {department.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+                <label className="text-sm">
+                  <span className="text-xs font-semibold uppercase text-slate-500">Behandler:in</span>
+                  <select
+                    value={searchFilters.providerId}
+                    onChange={handleProviderChange}
+                    className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
+                  >
+                    <option value="">Alle Behandler:innen</option>
+                    {providerOptions.map((provider) => (
+                      <option key={provider.id} value={provider.id}>
+                        {provider.display_name}
                       </option>
                     ))}
                   </select>
@@ -636,18 +1061,21 @@ export default function App() {
                   <select
                     value={searchFilters.specialty}
                     onChange={(event) =>
-                      setSearchFilters((prev) => ({ ...prev, specialty: event.target.value }))
+                      setSearchFilters((prev) => ({
+                        ...prev,
+                        specialty: event.target.value,
+                      }))
                     }
                     className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
                   >
-                    {specialties.map((specialty) => (
+                    {specialtyOptions.map((specialty) => (
                       <option key={specialty.value} value={specialty.value}>
                         {specialty.label}
                       </option>
                     ))}
                   </select>
                 </label>
-                <div className="md:col-span-2 flex items-end justify-end">
+                <div className="md:col-span-5 flex items-end justify-end">
                   <button
                     type="submit"
                     className="inline-flex items-center justify-center rounded-lg bg-blue-600 px-5 py-2 font-semibold text-white shadow hover:bg-blue-700"
@@ -669,14 +1097,182 @@ export default function App() {
                     <AppointmentCard
                       key={slot.id}
                       slot={slot}
-                      clinic={clinicLookup.get(slot.clinic_id)}
+                      clinic={facilityLookup.get(slot.facility_id)}
                       onBook={() => handleBook(slot.id)}
                       disabled={false}
                     />
                   ))
                 )}
               </div>
-            </div>
+              </div>
+
+              <div className="mt-8 rounded-3xl bg-white p-8 shadow-lg">
+                <h3 className="text-xl font-semibold text-slate-900">Einrichtungen in Ihrer Nähe</h3>
+                <p className="mt-2 text-sm text-slate-500">
+                  Suchen Sie nach Kliniken, Praxen oder Gemeinschaftspraxen und übernehmen Sie passende Einrichtungen direkt in die Terminsuche.
+                </p>
+                <form onSubmit={handleFacilitySearch} className="mt-4 grid gap-3 md:grid-cols-4">
+                  <label className="text-sm">
+                    <span className="text-xs font-semibold uppercase text-slate-500">PLZ</span>
+                    <input
+                      name="facility_postal"
+                      value={facilitySearch.postalCode}
+                      onChange={(event) =>
+                        setFacilitySearch((prev) => ({ ...prev, postalCode: event.target.value }))
+                      }
+                      className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
+                      placeholder="z. B. 10117"
+                    />
+                  </label>
+                  <label className="text-sm">
+                    <span className="text-xs font-semibold uppercase text-slate-500">Stadt</span>
+                    <input
+                      name="facility_city"
+                      value={facilitySearch.city}
+                      onChange={(event) =>
+                        setFacilitySearch((prev) => ({ ...prev, city: event.target.value }))
+                      }
+                      className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
+                      placeholder="z. B. Berlin"
+                    />
+                  </label>
+                  <label className="text-sm">
+                    <span className="text-xs font-semibold uppercase text-slate-500">Fachrichtung</span>
+                    <select
+                      value={facilitySearch.specialty}
+                      onChange={(event) =>
+                        setFacilitySearch((prev) => ({ ...prev, specialty: event.target.value }))
+                      }
+                      className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
+                    >
+                      {specialties.map((specialty) => (
+                        <option key={specialty.value} value={specialty.value}>
+                          {specialty.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="text-sm">
+                    <span className="text-xs font-semibold uppercase text-slate-500">Einrichtungstyp</span>
+                    <select
+                      value={facilitySearch.facilityType}
+                      onChange={(event) =>
+                        setFacilitySearch((prev) => ({ ...prev, facilityType: event.target.value }))
+                      }
+                      className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
+                    >
+                      {facilityTypes.map((type) => (
+                        <option key={type.value} value={type.value}>
+                          {type.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <div className="md:col-span-4 flex justify-end">
+                    <button
+                      type="submit"
+                      className="inline-flex items-center justify-center rounded-lg bg-blue-500 px-5 py-2 text-sm font-semibold text-white shadow hover:bg-blue-600"
+                    >
+                      Einrichtungen suchen
+                    </button>
+                  </div>
+                </form>
+
+                <div className="mt-6 space-y-4">
+                  {facilityResults.length === 0 ? (
+                    <p className="text-sm text-slate-500">
+                      Noch keine Suche durchgeführt oder keine Einrichtungen gefunden.
+                    </p>
+                  ) : (
+                    facilityResults.map((result) => (
+                      <div
+                        key={result.facility.id}
+                        className="rounded-2xl border border-slate-200 bg-slate-50 p-4"
+                      >
+                        <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+                          <div>
+                            <p className="text-base font-semibold text-slate-900">{result.facility.name}</p>
+                            <p className="text-xs font-semibold uppercase text-blue-600">
+                              {facilityTypeLabels[result.facility.facility_type] ?? result.facility.facility_type}
+                            </p>
+                            <p className="text-sm text-slate-600">
+                              {result.facility.street}, {result.facility.postal_code} {result.facility.city}
+                            </p>
+                            <p className="text-sm text-slate-600">Telefon {result.facility.phone_number}</p>
+                          </div>
+                          <button
+                            onClick={() => loadFacilitySlots(result.facility)}
+                            className="mt-2 inline-flex items-center justify-center rounded-lg border border-blue-200 px-3 py-1 text-sm font-semibold text-blue-700 hover:bg-blue-50 md:mt-0"
+                          >
+                            In Suche übernehmen
+                          </button>
+                        </div>
+                        {result.next_slots.length > 0 ? (
+                          <div className="mt-3 grid gap-2 md:grid-cols-3">
+                            {result.next_slots.map((slot) => {
+                              const providerLabel =
+                                slot.provider_name ??
+                                result.facility.providers?.find(
+                                  (provider) => provider.id === slot.provider_id
+                                )?.display_name ??
+                                (slot.provider_id ? `ID ${slot.provider_id}` : "Teamtermin");
+                              return (
+                                <div
+                                  key={slot.id}
+                                  className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600"
+                                >
+                                  <p className="font-semibold text-slate-900">{formatDateTime(slot.start)}</p>
+                                  <p>{providerLabel}</p>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        ) : (
+                          <p className="mt-3 text-xs text-slate-500">Keine offenen Slots gefunden.</p>
+                        )}
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+
+              {user?.role === "patient" && (
+                <div className="mt-8 rounded-3xl bg-white p-8 shadow-lg">
+                  <h3 className="text-xl font-semibold text-slate-900">Profil aktualisieren</h3>
+                  <p className="mt-2 text-sm text-slate-500">
+                    Passen Sie Ihren Anzeigenamen und Ihre Telefonnummer an. Änderungen werden sofort wirksam.
+                  </p>
+                  {profileMessage && (
+                    <p className="mt-2 text-sm text-blue-700">{profileMessage}</p>
+                  )}
+                  <form onSubmit={handleProfileUpdate} className="mt-4 grid gap-3 md:grid-cols-2">
+                    <label className="text-sm">
+                      <span className="text-xs font-semibold uppercase text-slate-500">Anzeigename</span>
+                      <input
+                        name="display_name"
+                        defaultValue={user?.display_name ?? ""}
+                        className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
+                      />
+                    </label>
+                    <label className="text-sm">
+                      <span className="text-xs font-semibold uppercase text-slate-500">Telefonnummer</span>
+                      <input
+                        name="profile_phone"
+                        defaultValue={patientRecord?.profile?.phone_number ?? ""}
+                        className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
+                      />
+                    </label>
+                    <div className="md:col-span-2 flex justify-end">
+                      <button
+                        type="submit"
+                        className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-blue-700"
+                      >
+                        Profil speichern
+                      </button>
+                    </div>
+                  </form>
+                </div>
+              )}
 
             <div className="grid gap-8 lg:grid-cols-[1.4fr,1fr]">
               <div className="rounded-3xl bg-white p-8 shadow-lg">
@@ -705,7 +1301,7 @@ export default function App() {
                         <div className="flex flex-wrap items-center justify-between gap-3">
                           <div>
                             <p className="text-sm font-semibold text-slate-900">
-                              {clinicLookup.get(appointment.clinic_id)?.name ?? appointment.clinic_id}
+                              {facilityLookup.get(appointment.facility_id)?.name ?? appointment.facility_id}
                             </p>
                             <p className="text-sm text-slate-600">{formatDateTime(appointment.start)}</p>
                           </div>
@@ -736,21 +1332,23 @@ export default function App() {
                   <p className="mt-2 text-sm text-blue-600">{consentMessage}</p>
                 )}
                 <div className="mt-4 space-y-3">
-                  {clinics.map((clinic) => {
-                    const granted = consentedClinicIds.includes(clinic.id);
+                  {facilitySummaries.map((facility) => {
+                    const granted = consentedFacilityIds.includes(facility.id);
                     return (
                       <div
-                        key={clinic.id}
+                        key={facility.id}
                         className="flex items-center justify-between rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3"
                       >
                         <div>
-                          <p className="text-sm font-semibold text-slate-900">{clinic.name}</p>
-                          <p className="text-xs text-slate-500">{clinic.city}</p>
+                          <p className="text-sm font-semibold text-slate-900">{facility.name}</p>
+                          <p className="text-xs text-slate-500">
+                            {facilityTypeLabels[facility.facility_type] ?? facility.facility_type} · {facility.city}
+                          </p>
                         </div>
                         <div className="flex items-center gap-3">
-                          <ConsentBadge clinicName={clinic.name} granted={granted} />
+                          <ConsentBadge clinicName={facility.name} granted={granted} />
                           <button
-                            onClick={() => handleConsentChange(clinic.id, !granted)}
+                            onClick={() => handleConsentChange(facility.id, !granted)}
                             className={`rounded-lg px-3 py-1 text-sm font-semibold ${
                               granted
                                 ? "border border-rose-200 text-rose-600 hover:bg-rose-50"
@@ -793,15 +1391,107 @@ export default function App() {
 
         {(user?.role === "clinic_admin" || user?.role === "provider") && (
           <section className="mx-auto max-w-6xl space-y-10">
-            <div className="rounded-3xl bg-white p-6 shadow-lg">
-              <h2 className="text-lg font-semibold text-slate-900">Klinikkontext</h2>
-              <p className="mt-1 text-sm text-slate-600">
-                Diese Kennung wird in Audit-Logs und bei Patientenfreigaben verwendet.
-              </p>
-              <div className="mt-3 inline-flex items-center gap-2 rounded-xl bg-blue-50 px-4 py-2">
-                <span className="text-xs font-semibold uppercase text-blue-700">Klinik-ID</span>
-                <code className="text-sm font-mono text-blue-900">{user?.clinic_id ?? "unbekannt"}</code>
+            <div className="rounded-3xl bg-white p-6 shadow-lg space-y-4">
+              <div>
+                <h2 className="text-lg font-semibold text-slate-900">Einrichtungskontext</h2>
+                <p className="mt-1 text-sm text-slate-600">
+                  Diese Kennung wird in Audit-Logs und bei Patientenfreigaben verwendet.
+                </p>
+                <div className="mt-3 inline-flex items-center gap-2 rounded-xl bg-blue-50 px-4 py-2">
+                  <span className="text-xs font-semibold uppercase text-blue-700">Einrichtungs-ID</span>
+                  <code className="text-sm font-mono text-blue-900">{user?.facility_id ?? "unbekannt"}</code>
+                </div>
               </div>
+              {facilityProfile && (
+                <div className="grid gap-2 text-sm text-slate-600 md:grid-cols-2">
+                  <p><span className="font-semibold text-slate-800">Typ:</span> {facilityTypeLabels[facilityProfile.facility_type] ?? facilityProfile.facility_type}</p>
+                  <p><span className="font-semibold text-slate-800">Telefon:</span> {facilityProfile.phone_number}</p>
+                  <p className="md:col-span-2">
+                    <span className="font-semibold text-slate-800">Adresse:</span> {facilityProfile.street}, {facilityProfile.postal_code} {facilityProfile.city}
+                  </p>
+                  {facilityProfile.owners?.length ? (
+                    <p className="md:col-span-2">
+                      <span className="font-semibold text-slate-800">Eigentümer:innen:</span> {facilityProfile.owners.join(", ")}
+                    </p>
+                  ) : null}
+                </div>
+              )}
+              {facilityMessage && (
+                <p className="text-sm text-blue-700">{facilityMessage}</p>
+              )}
+              {user?.role === "clinic_admin" && facilityProfile && (
+                <form onSubmit={handleFacilityUpdate} className="grid gap-3 md:grid-cols-3">
+                  <label className="text-xs font-semibold uppercase text-slate-500">
+                    Kontakt-E-Mail
+                    <input
+                      name="facility_email"
+                      type="email"
+                      defaultValue={facilityProfile.contact_email}
+                      className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
+                    />
+                  </label>
+                  <label className="text-xs font-semibold uppercase text-slate-500">
+                    Telefon
+                    <input
+                      name="facility_phone"
+                      defaultValue={facilityProfile.phone_number}
+                      className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
+                    />
+                  </label>
+                  <label className="text-xs font-semibold uppercase text-slate-500">
+                    Straße
+                    <input
+                      name="facility_street"
+                      defaultValue={facilityProfile.street}
+                      className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
+                    />
+                  </label>
+                  <label className="text-xs font-semibold uppercase text-slate-500">
+                    PLZ
+                    <input
+                      name="facility_postal"
+                      defaultValue={facilityProfile.postal_code}
+                      className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
+                    />
+                  </label>
+                  <label className="text-xs font-semibold uppercase text-slate-500">
+                    Stadt
+                    <input
+                      name="facility_city"
+                      defaultValue={facilityProfile.city}
+                      className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
+                    />
+                  </label>
+                  <label className="text-xs font-semibold uppercase text-slate-500 md:col-span-3">
+                    Öffnungszeiten
+                    <textarea
+                      name="facility_hours"
+                      rows={3}
+                      defaultValue={facilityProfile.opening_hours
+                        ?.map((entry) => `${weekdayKeys[entry.weekday] ?? entry.weekday}:${entry.opens_at}-${entry.closes_at}`)
+                        .join("\n")}
+                      className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
+                    />
+                  </label>
+                  <label className="text-xs font-semibold uppercase text-slate-500 md:col-span-3">
+                    Eigentümer:innen
+                    <textarea
+                      name="facility_owners"
+                      rows={2}
+                      defaultValue={facilityProfile.owners?.join("\n")}
+                      className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
+                    />
+                  </label>
+                  <div className="md:col-span-3 flex justify-end">
+                    <button
+                      type="submit"
+                      className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-blue-700"
+                    >
+                      Einrichtung speichern
+                    </button>
+                  </div>
+                </form>
+              )}
             </div>
             <div className="rounded-3xl bg-white p-8 shadow-lg">
               <div className="flex items-center justify-between">
@@ -933,6 +1623,39 @@ export default function App() {
                       <input name="is_virtual" type="checkbox" className="h-4 w-4 rounded border-blue-300" />
                       Videosprechstunde
                     </label>
+                    {user?.role === "clinic_admin" && (
+                      <label className="block text-sm">
+                        <span className="text-xs font-semibold uppercase text-blue-700">Behandler:in</span>
+                        <select
+                          name="slot_provider"
+                          required
+                          className="mt-1 w-full rounded-lg border border-blue-200 bg-white px-3 py-2"
+                        >
+                          <option value="">Bitte wählen</option>
+                          {providers.map((provider) => (
+                            <option key={provider.id} value={provider.id}>
+                              {provider.display_name}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    )}
+                    {facilityProfile?.departments?.length ? (
+                      <label className="block text-sm">
+                        <span className="text-xs font-semibold uppercase text-blue-700">Fachbereich</span>
+                        <select
+                          name="slot_department"
+                          className="mt-1 w-full rounded-lg border border-blue-200 bg-white px-3 py-2"
+                        >
+                          <option value="">Automatisch</option>
+                          {facilityProfile.departments.map((department) => (
+                            <option key={department.id} value={department.id}>
+                              {department.name}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    ) : null}
                     <button
                       type="submit"
                       disabled={creatingSlot}
@@ -1054,9 +1777,10 @@ export default function App() {
                       />
                     </label>
                     <label className="text-sm">
-                      <span className="text-xs font-semibold uppercase text-slate-500">Fachrichtung</span>
+                      <span className="text-xs font-semibold uppercase text-slate-500">Fächer</span>
                       <select
-                        name="provider_specialty"
+                        name="provider_specialties"
+                        multiple
                         className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
                       >
                         {specialties
@@ -1067,7 +1791,24 @@ export default function App() {
                             </option>
                           ))}
                       </select>
+                      <p className="mt-1 text-xs text-slate-400">Mehrfachauswahl mit Strg/Cmd.</p>
                     </label>
+                    {facilityProfile?.departments?.length ? (
+                      <label className="text-sm">
+                        <span className="text-xs font-semibold uppercase text-slate-500">Fachbereich</span>
+                        <select
+                          name="provider_department"
+                          className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
+                        >
+                          <option value="">Keiner</option>
+                          {facilityProfile.departments.map((department) => (
+                            <option key={department.id} value={department.id}>
+                              {department.name}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    ) : null}
                     <button
                       type="submit"
                       className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-blue-700"
@@ -1080,16 +1821,26 @@ export default function App() {
                     {providers.length === 0 ? (
                       <p className="text-sm text-slate-500">Noch keine Behandler:innen registriert.</p>
                     ) : (
-                      providers.map((provider) => (
-                        <div
-                          key={provider.id}
-                          className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm"
-                        >
-                          <p className="font-semibold text-slate-900">{provider.display_name}</p>
-                          <p className="text-slate-600">{provider.email}</p>
-                          <p className="text-slate-500 text-xs">{provider.specialty}</p>
-                        </div>
-                      ))
+                      providers.map((provider) => {
+                        const departmentName = facilityProfile?.departments?.find(
+                          (dept) => dept.id === provider.department_id
+                        )?.name;
+                        return (
+                          <div
+                            key={provider.id}
+                            className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm"
+                          >
+                            <p className="font-semibold text-slate-900">{provider.display_name}</p>
+                            <p className="text-slate-600">{provider.email}</p>
+                            <p className="text-xs text-slate-500">
+                              {provider.specialties?.length
+                                ? provider.specialties.join(", ")
+                                : "Keine Fachrichtung hinterlegt"}
+                              {departmentName ? ` · ${departmentName}` : ""}
+                            </p>
+                          </div>
+                        );
+                      })
                     )}
                   </div>
                 </div>
@@ -1100,23 +1851,39 @@ export default function App() {
 
         {user?.role === "platform_admin" && (
           <section className="mx-auto max-w-6xl rounded-3xl bg-white p-8 shadow-lg">
-            <h2 className="text-xl font-semibold text-slate-900">Neue Klinik registrieren</h2>
+            <h2 className="text-xl font-semibold text-slate-900">Neue Einrichtung registrieren</h2>
             {adminFeedback && (
               <p className="mt-2 text-sm text-blue-700">{adminFeedback}</p>
             )}
             <form onSubmit={handleRegisterClinic} className="mt-4 grid gap-4 md:grid-cols-2">
               <div className="space-y-3">
-                <h3 className="text-sm font-semibold uppercase text-slate-500">Klinikdaten</h3>
+                <h3 className="text-sm font-semibold uppercase text-slate-500">Einrichtungsdaten</h3>
                 <p className="text-xs font-medium text-slate-500">
-                  Die Plattform vergibt eine Klinik-ID automatisch und blendet sie nach erfolgreicher Registrierung ein.
+                  Die Plattform vergibt eine ID automatisch und blendet sie nach erfolgreicher Registrierung ein.
                 </p>
                 <label className="text-sm">
                   <span className="text-xs font-semibold uppercase text-slate-500">Name</span>
                   <input name="clinic_name" required className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2" />
                 </label>
                 <label className="text-sm">
-                  <span className="text-xs font-semibold uppercase text-slate-500">Fachrichtung</span>
-                  <select name="clinic_specialty" className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2">
+                  <span className="text-xs font-semibold uppercase text-slate-500">Einrichtungstyp</span>
+                  <select
+                    name="facility_type"
+                    required
+                    className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
+                  >
+                    <option value="clinic">Klinik</option>
+                    <option value="practice">Praxis</option>
+                    <option value="group_practice">Gemeinschaftspraxis</option>
+                  </select>
+                </label>
+                <label className="text-sm">
+                  <span className="text-xs font-semibold uppercase text-slate-500">Fachrichtungen</span>
+                  <select
+                    name="clinic_specialties"
+                    multiple
+                    className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
+                  >
                     {specialties
                       .filter((entry) => entry.value !== "")
                       .map((specialty) => (
@@ -1125,6 +1892,7 @@ export default function App() {
                         </option>
                       ))}
                   </select>
+                  <p className="mt-1 text-xs text-slate-400">Mehrfachauswahl mit Strg/Cmd.</p>
                 </label>
                 <label className="text-sm">
                   <span className="text-xs font-semibold uppercase text-slate-500">Stadt</span>
@@ -1145,6 +1913,43 @@ export default function App() {
                     type="email"
                     required
                     className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
+                  />
+                </label>
+                <label className="text-sm">
+                  <span className="text-xs font-semibold uppercase text-slate-500">Telefon</span>
+                  <input
+                    name="clinic_phone"
+                    required
+                    className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
+                  />
+                </label>
+                <label className="text-sm">
+                  <span className="text-xs font-semibold uppercase text-slate-500">Öffnungszeiten</span>
+                  <textarea
+                    name="clinic_hours"
+                    rows={4}
+                    className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
+                    placeholder="Mo:08:00-16:00\nDi:08:00-16:00"
+                  />
+                  <p className="mt-1 text-xs text-slate-400">Format je Zeile: Wochentag:Start-Ende</p>
+                </label>
+                <label className="text-sm">
+                  <span className="text-xs font-semibold uppercase text-slate-500">Fachbereiche</span>
+                  <textarea
+                    name="clinic_departments"
+                    rows={4}
+                    className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
+                    placeholder="Kardiologie:cardiology\nDermatologie:dermatology"
+                  />
+                  <p className="mt-1 text-xs text-slate-400">Optional, Format: Name:fach1,fach2</p>
+                </label>
+                <label className="text-sm">
+                  <span className="text-xs font-semibold uppercase text-slate-500">Eigentümer:innen</span>
+                  <textarea
+                    name="facility_owners"
+                    rows={3}
+                    className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2"
+                    placeholder="Name je Zeile"
                   />
                 </label>
               </div>
@@ -1176,7 +1981,7 @@ export default function App() {
                   type="submit"
                   className="mt-4 w-full rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-blue-700"
                 >
-                  Klinik anlegen
+                  Einrichtung anlegen
                 </button>
               </div>
             </form>

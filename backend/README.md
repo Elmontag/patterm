@@ -28,6 +28,23 @@ The API docs are available at `http://127.0.0.1:8000/docs` once the server is ru
 - **Benutzer & Sessions:** Passwörter werden per PBKDF2 gehasht in `backend/app/data/identity.json` abgelegt.
   Session-Tokens liegen serverseitig in `backend/app/data/sessions.json`.
 
+## Facilities & scheduling endpoints
+
+- `GET /facilities` liefert eine Übersicht aller Kliniken, Praxen und Gemeinschaftspraxen. Ein optionaler
+  `facility_type`-Query-Parameter filtert auf einzelne Kategorien.
+- `GET /facilities/{facility_id}` stellt Detailinformationen bereit: Öffnungszeiten, Telefonnummern,
+  Fachbereiche (für Kliniken), Behandler:innen und Eigentümer:innen.
+- `GET /facilities/search` kombiniert Standortparameter (PLZ, Stadt) mit medizinischen Filtern (Fachrichtung) und
+  liefert zusätzlich die drei nächsten freien Slots je Einrichtung.
+- `GET /appointments/search` greift auf die reine Slotliste zu. Filter für Einrichtung, Fachbereich, Behandler:in
+  oder Fachrichtung lassen sich kombinieren.
+- `PATCH /auth/profile` erlaubt Patient:innen und Klinik-/Praxispersonal, Anzeige-Namen sowie Telefonnummern
+  anzupassen.
+
+Kliniken definieren Fachbereiche mit einer Liste zugehöriger Behandler:innen. Praxen und Gemeinschaftspraxen
+aggregieren Fachrichtungen aus den hinterlegten Ärzt:innenprofilen. Für Gemeinschaftspraxen erzwingt das Backend
+mindestens zwei Eigentümer:innen, um Verantwortlichkeiten eindeutig zu dokumentieren.
+
 ## Authentifizierungsablauf (per HTTPie)
 
 ```bash

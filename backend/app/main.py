@@ -103,7 +103,21 @@ def to_public(account: UserAccount) -> schemas.UserPublicProfile:
         email=account.email,
         role=account.role,
         display_name=account.display_name,
-        clinic_id=account.clinic_id,
+        facility_id=account.facility_id,
+    )
+
+
+def to_summary(detail: schemas.FacilityDetail) -> schemas.FacilitySummary:
+    return schemas.FacilitySummary(
+        id=detail.id,
+        name=detail.name,
+        facility_type=detail.facility_type,
+        specialties=detail.specialties,
+        city=detail.city,
+        street=detail.street,
+        postal_code=detail.postal_code,
+        contact_email=detail.contact_email,
+        phone_number=detail.phone_number,
     )
 
 
@@ -164,22 +178,62 @@ async def get_profile(current: UserAccount = Depends(get_current_account)) -> sc
     return to_public(current)
 
 
+@app.patch("/auth/profile", response_model=schemas.UserPublicProfile)
+async def update_profile(
+    payload: schemas.UserProfileUpdate,
+    current: UserAccount = Depends(get_current_account),
+    users: UserDirectory = Depends(get_user_directory),
+    vault: PatientVault = Depends(get_vault),
+) -> schemas.UserPublicProfile:
+    updated = False
+    if payload.display_name:
+        current.display_name = payload.display_name
+        updated = True
+    if (
+        payload.phone_number
+        and current.role == schemas.UserRole.patient
+        and current.patient_profile is not None
+    ):
+        current.patient_profile.phone_number = payload.phone_number
+        record = vault.load(current.id)
+        if record:
+            record.profile.phone_number = payload.phone_number
+            vault.store(record)
+        updated = True
+    if not updated:
+        return to_public(current)
+    try:
+        users.save(current)
+    except IdentityStoreError as error:
+        raise HTTPException(
+            status_code=500, detail="Profilaktualisierung derzeit nicht möglich"
+        ) from error
+    return to_public(current)
+
+
 @app.post(
     "/auth/register/clinic",
-    response_model=schemas.ClinicRegistrationResponse,
+    response_model=schemas.FacilityRegistrationResponse,
     status_code=201,
 )
-async def register_clinic(
-    payload: schemas.ClinicRegistration,
+async def register_facility(
+    payload: schemas.FacilityRegistration,
     current: UserAccount = Depends(get_current_account),
     repository: AppointmentRepository = Depends(get_repository),
     users: UserDirectory = Depends(get_user_directory),
-) -> schemas.ClinicRegistrationResponse:
+) -> schemas.FacilityRegistrationResponse:
     require_roles(current, [schemas.UserRole.platform_admin])
-    clinic = repository.add_clinic(payload.clinic)
     try:
-        account = users.create_clinic_admin(
-            clinic_id=clinic.id,
+        facility = repository.add_facility(
+            payload.facility,
+            departments=payload.departments,
+            owners=payload.owners,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    try:
+        account = users.create_facility_admin(
+            facility_id=facility.id,
             email=payload.admin_email,
             password=payload.admin_password,
             display_name=payload.admin_display_name,
@@ -190,8 +244,8 @@ async def register_clinic(
         raise HTTPException(
             status_code=500, detail="Identitätsregister derzeit nicht verfügbar"
         ) from error
-    return schemas.ClinicRegistrationResponse(
-        clinic=clinic,
+    return schemas.FacilityRegistrationResponse(
+        facility=facility,
         admin=to_public(account),
     )
 
@@ -204,32 +258,59 @@ async def register_provider(
     users: UserDirectory = Depends(get_user_directory),
 ) -> schemas.ProviderProfile:
     require_roles(current, [schemas.UserRole.clinic_admin])
-    if current.clinic_id is None:
-        raise HTTPException(status_code=403, detail="Clinic context missing for account")
-    if payload.clinic_id != current.clinic_id:
-        raise HTTPException(status_code=403, detail="Clinic mismatch for provider registration")
-    if repository.get_clinic(payload.clinic_id) is None:
-        raise HTTPException(status_code=404, detail="Clinic not found")
+    if current.facility_id is None:
+        raise HTTPException(status_code=403, detail="Facility context missing for account")
+    if payload.facility_id != current.facility_id:
+        raise HTTPException(status_code=403, detail="Facility mismatch for provider registration")
+    facility = repository.get_facility(payload.facility_id)
+    if facility is None:
+        raise HTTPException(status_code=404, detail="Einrichtung nicht gefunden")
+    if (
+        facility.facility_type == schemas.FacilityType.clinic
+        and payload.department_id
+        and payload.department_id
+        not in {department.id for department in facility.departments}
+    ):
+        raise HTTPException(status_code=404, detail="Fachbereich nicht gefunden")
+    if (
+        facility.facility_type == schemas.FacilityType.clinic
+        and not payload.department_id
+    ):
+        raise HTTPException(status_code=400, detail="Fachbereich erforderlich")
+    if not payload.specialties:
+        raise HTTPException(status_code=400, detail="Mindestens ein Fach muss ausgewählt werden")
+    if users.get_by_email(payload.email):
+        raise HTTPException(status_code=409, detail="E-Mail-Adresse bereits registriert")
+    provider_id = f"provider-{uuid4().hex[:8]}"
+    try:
+        profile = repository.add_provider(
+            facility_id=payload.facility_id,
+            display_name=payload.display_name,
+            email=payload.email,
+            specialties=payload.specialties,
+            department_id=payload.department_id,
+            provider_id=provider_id,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
     try:
         account = users.create_provider(
-            clinic_id=payload.clinic_id,
+            facility_id=payload.facility_id,
             email=payload.email,
             password=payload.password,
             display_name=payload.display_name,
-            specialty=payload.specialty,
+            specialties=payload.specialties,
+            provider_id=profile.id,
         )
     except (DuplicateEmailError, DuplicateAccountError) as error:
+        repository.remove_provider(payload.facility_id, provider_id)
         raise HTTPException(status_code=409, detail=str(error)) from error
     except IdentityStoreError as error:
+        repository.remove_provider(payload.facility_id, provider_id)
         raise HTTPException(
             status_code=500, detail="Identitätsregister derzeit nicht verfügbar"
         ) from error
-    return schemas.ProviderProfile(
-        id=account.id,
-        display_name=account.display_name,
-        email=account.email,
-        specialty=payload.specialty,
-    )
+    return profile
 
 
 def stable_hash(*components: str) -> str:
@@ -239,24 +320,82 @@ def stable_hash(*components: str) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-@app.get("/clinics", response_model=list[schemas.Clinic])
+@app.get("/facilities", response_model=list[schemas.FacilitySummary])
+async def list_facilities(
+    facility_type: Optional[schemas.FacilityType] = None,
+    repository: AppointmentRepository = Depends(get_repository),
+) -> list[schemas.FacilitySummary]:
+    """List facilities across all types for discovery and filtering."""
+
+    return repository.list_facility_summaries(facility_type=facility_type)
+
+
+@app.get("/facilities/{facility_id}", response_model=schemas.FacilityDetail)
+async def get_facility_detail(
+    facility_id: str,
+    repository: AppointmentRepository = Depends(get_repository),
+) -> schemas.FacilityDetail:
+    """Retrieve the full detail of a facility."""
+
+    facility = repository.get_facility(facility_id)
+    if facility is None:
+        raise HTTPException(status_code=404, detail="Einrichtung nicht gefunden")
+    return facility
+
+
+@app.get("/clinics", response_model=list[schemas.FacilitySummary])
 async def list_clinics(
     repository: AppointmentRepository = Depends(get_repository),
-) -> list[schemas.Clinic]:
+) -> list[schemas.FacilitySummary]:
     """List clinics that are available for booking."""
 
-    return repository.list_clinics()
+    return repository.list_facility_summaries(
+        facility_type=schemas.FacilityType.clinic
+    )
 
 
 @app.get("/appointments/search", response_model=list[schemas.AppointmentSlot])
 async def search_appointments(
     specialty: Optional[schemas.Specialty] = None,
-    clinic_id: Optional[str] = None,
+    facility_id: Optional[str] = None,
+    facility_type: Optional[schemas.FacilityType] = None,
+    department_id: Optional[str] = None,
+    provider_id: Optional[str] = None,
     repository: AppointmentRepository = Depends(get_repository),
 ) -> list[schemas.AppointmentSlot]:
-    """Search appointments by specialty and/or clinic."""
+    """Search appointments by specialty and facility filters."""
 
-    return repository.search_slots(specialty=specialty, clinic_id=clinic_id)
+    return repository.search_slots(
+        specialty=specialty,
+        facility_id=facility_id,
+        facility_type=facility_type,
+        department_id=department_id,
+        provider_id=provider_id,
+    )
+
+
+@app.get("/facilities/search", response_model=list[schemas.FacilitySearchResult])
+async def search_facilities(
+    postal_code: Optional[str] = None,
+    city: Optional[str] = None,
+    specialty: Optional[schemas.Specialty] = None,
+    facility_type: Optional[schemas.FacilityType] = None,
+    repository: AppointmentRepository = Depends(get_repository),
+) -> list[schemas.FacilitySearchResult]:
+    """Discover nearby facilities and their next available appointments."""
+
+    results = repository.search_facilities_near(
+        postal_code=postal_code,
+        city=city,
+        specialty=specialty,
+    )
+    if facility_type:
+        results = [
+            result
+            for result in results
+            if result.facility.facility_type == facility_type
+        ]
+    return results
 
 
 @app.post("/appointments", response_model=schemas.AppointmentConfirmation)
@@ -281,9 +420,9 @@ async def book_appointment(
         status_code = 404 if "not found" in message.lower() else 400
         raise HTTPException(status_code=status_code, detail=message)
 
-    clinic = repository.get_clinic(slot.clinic_id)
-    if clinic is None:
-        raise HTTPException(status_code=404, detail="Clinic not found for slot")
+    facility = repository.get_facility(slot.facility_id)
+    if facility is None:
+        raise HTTPException(status_code=404, detail="Einrichtung für Slot nicht gefunden")
 
     record = vault.load(current.id)
     if record is None:
@@ -316,8 +455,8 @@ async def book_appointment(
         )
     )
 
-    if slot.clinic_id not in record.consents:
-        record.consents.append(slot.clinic_id)
+    if slot.facility_id not in record.consents:
+        record.consents.append(slot.facility_id)
 
     vault.store(record)
 
@@ -326,13 +465,13 @@ async def book_appointment(
         subject="Terminbestätigung",
         body=(
             f"Hallo {current.patient_profile.first_name},\n\n"
-            f"Ihr Termin bei {clinic.name} am {slot.start:%d.%m.%Y %H:%M} Uhr wurde bestätigt."
+            f"Ihr Termin bei {facility.name} am {slot.start:%d.%m.%Y %H:%M} Uhr wurde bestätigt."
         ),
     )
 
     return schemas.AppointmentConfirmation(
         appointment=slot,
-        clinic=clinic,
+        facility=to_summary(facility),
         confirmation_number=str(uuid4()),
     )
 
@@ -449,10 +588,12 @@ async def reschedule_appointment(
         )
     else:
         record.profile = current.patient_profile
-    record.appointments = [appointment for appointment in record.appointments if appointment.id != slot_id]
+    record.appointments = [
+        appointment for appointment in record.appointments if appointment.id != slot_id
+    ]
     record.appointments.append(new_slot)
-    if new_slot.clinic_id not in record.consents:
-        record.consents.append(new_slot.clinic_id)
+    if new_slot.facility_id not in record.consents:
+        record.consents.append(new_slot.facility_id)
     vault.store(record)
 
     event_timestamp = datetime.utcnow()
@@ -474,13 +615,13 @@ async def reschedule_appointment(
     )
 
     if current.patient_profile:
-        clinic = repository.get_clinic(new_slot.clinic_id)
+        facility = repository.get_facility(new_slot.facility_id)
         email_gateway.send_confirmation(
             to=current.patient_profile.email,
             subject="Termin verschoben",
             body=(
                 f"Hallo {current.patient_profile.first_name},\n\n"
-                f"Ihr Termin bei {(clinic.name if clinic else new_slot.clinic_id)} wurde auf {new_slot.start:%d.%m.%Y %H:%M} Uhr verschoben."
+                f"Ihr Termin bei {(facility.name if facility else new_slot.facility_id)} wurde auf {new_slot.start:%d.%m.%Y %H:%M} Uhr verschoben."
             ),
         )
 
@@ -491,14 +632,14 @@ async def reschedule_appointment(
     "/medical/slots",
     response_model=list[schemas.AppointmentSlot],
 )
-async def list_clinic_slots(
+async def list_facility_slots(
     current: UserAccount = Depends(get_current_account),
     repository: AppointmentRepository = Depends(get_repository),
 ) -> list[schemas.AppointmentSlot]:
     require_roles(current, [schemas.UserRole.clinic_admin, schemas.UserRole.provider])
-    if current.clinic_id is None:
-        raise HTTPException(status_code=403, detail="Clinic context missing for account")
-    slots = repository.clinic_slots(current.clinic_id)
+    if current.facility_id is None:
+        raise HTTPException(status_code=403, detail="Kontext der Einrichtung fehlt")
+    slots = repository.facility_slots(current.facility_id)
     return sorted(slots, key=lambda slot: slot.start)
 
 
@@ -507,22 +648,49 @@ async def list_clinic_slots(
     response_model=schemas.AppointmentSlot,
     status_code=201,
 )
-async def create_clinic_slot(
+async def create_facility_slot(
     payload: schemas.SlotCreationRequest,
     current: UserAccount = Depends(get_current_account),
     repository: AppointmentRepository = Depends(get_repository),
 ) -> schemas.AppointmentSlot:
     require_roles(current, [schemas.UserRole.clinic_admin, schemas.UserRole.provider])
-    if current.clinic_id is None:
-        raise HTTPException(status_code=403, detail="Clinic context missing for account")
-    return repository.create_slot(current.clinic_id, payload)
+    if current.facility_id is None:
+        raise HTTPException(status_code=403, detail="Kontext der Einrichtung fehlt")
+    facility = repository.get_facility(current.facility_id)
+    if facility is None:
+        raise HTTPException(status_code=404, detail="Einrichtung nicht gefunden")
+    payload_data = payload.model_dump()
+    provider_id = payload_data.get("provider_id")
+    if provider_id is None:
+        if current.role == schemas.UserRole.provider:
+            provider_id = current.id
+        else:
+            raise HTTPException(status_code=400, detail="Behandler erforderlich")
+    if facility.facility_type == schemas.FacilityType.clinic:
+        department_id = payload_data.get("department_id")
+        if department_id is None:
+            provider = next(
+                (person for person in facility.providers if person.id == provider_id),
+                None,
+            )
+            department_id = provider.department_id if provider else None
+            if department_id is None and facility.departments:
+                department_id = facility.departments[0].id
+        if department_id is None:
+            raise HTTPException(status_code=400, detail="Fachbereich erforderlich")
+        payload_data["department_id"] = department_id
+    payload_data["provider_id"] = provider_id
+    slot = repository.create_slot(
+        current.facility_id, schemas.SlotCreationRequest(**payload_data)
+    )
+    return slot
 
 
 @app.patch(
     "/medical/slots/{slot_id}",
     response_model=schemas.AppointmentSlot,
 )
-async def update_clinic_slot(
+async def update_facility_slot(
     slot_id: str,
     payload: schemas.SlotUpdateRequest,
     current: UserAccount = Depends(get_current_account),
@@ -532,12 +700,12 @@ async def update_clinic_slot(
     email_gateway: EmailGateway = Depends(get_email_gateway),
 ) -> schemas.AppointmentSlot:
     require_roles(current, [schemas.UserRole.clinic_admin, schemas.UserRole.provider])
-    if current.clinic_id is None:
-        raise HTTPException(status_code=403, detail="Clinic context missing for account")
+    if current.facility_id is None:
+        raise HTTPException(status_code=403, detail="Kontext der Einrichtung fehlt")
     slot = repository.get_slot(slot_id)
-    if slot is None or slot.clinic_id != current.clinic_id:
-        raise HTTPException(status_code=404, detail="Slot not found for clinic")
-    clinic = repository.get_clinic(current.clinic_id)
+    if slot is None or slot.facility_id != current.facility_id:
+        raise HTTPException(status_code=404, detail="Slot nicht gefunden")
+    facility = repository.get_facility(current.facility_id)
     try:
         updated = repository.update_slot(slot_id, payload)
     except ValueError as error:
@@ -562,8 +730,8 @@ async def update_clinic_slot(
         audit_logger.append(
             schemas.AuditEvent(
                 id=str(uuid4()),
-                actor=current.clinic_id,
-                action="clinic_update_slot",
+                actor=current.facility_id,
+                action="facility_update_slot",
                 patient_id=updated.booked_patient_id,
                 timestamp=event_timestamp,
                 payload_hash=payload_hash,
@@ -575,7 +743,7 @@ async def update_clinic_slot(
                 subject="Termin aktualisiert",
                 body=(
                     f"Hallo {updated.patient_snapshot.first_name},\n\n"
-                    f"Ihr Termin bei {(clinic.name if clinic else current.clinic_id)} wurde auf {updated.start:%d.%m.%Y %H:%M} Uhr aktualisiert."
+                    f"Ihr Termin bei {(facility.name if facility else current.facility_id)} wurde auf {updated.start:%d.%m.%Y %H:%M} Uhr aktualisiert."
                 ),
             )
 
@@ -586,7 +754,7 @@ async def update_clinic_slot(
     "/medical/slots/{slot_id}/cancel",
     response_model=schemas.AppointmentSlot,
 )
-async def cancel_clinic_slot(
+async def cancel_facility_slot(
     slot_id: str,
     current: UserAccount = Depends(get_current_account),
     repository: AppointmentRepository = Depends(get_repository),
@@ -595,10 +763,12 @@ async def cancel_clinic_slot(
     email_gateway: EmailGateway = Depends(get_email_gateway),
 ) -> schemas.AppointmentSlot:
     require_roles(current, [schemas.UserRole.clinic_admin, schemas.UserRole.provider])
+    if current.facility_id is None:
+        raise HTTPException(status_code=403, detail="Kontext der Einrichtung fehlt")
     slot = repository.get_slot(slot_id)
-    if slot is None or slot.clinic_id != current.clinic_id:
-        raise HTTPException(status_code=404, detail="Slot not found for clinic")
-    clinic = repository.get_clinic(current.clinic_id)
+    if slot is None or slot.facility_id != current.facility_id:
+        raise HTTPException(status_code=404, detail="Slot nicht gefunden")
+    facility = repository.get_facility(current.facility_id)
     cancelled = repository.cancel_slot(slot_id)
     if slot.booked_patient_id:
         record = vault.load(slot.booked_patient_id)
@@ -616,8 +786,8 @@ async def cancel_clinic_slot(
         audit_logger.append(
             schemas.AuditEvent(
                 id=str(uuid4()),
-                actor=current.clinic_id,
-                action="clinic_cancel_slot",
+                actor=current.facility_id,
+                action="facility_cancel_slot",
                 patient_id=slot.booked_patient_id,
                 timestamp=event_timestamp,
                 payload_hash=payload_hash,
@@ -629,7 +799,7 @@ async def cancel_clinic_slot(
                 subject="Termin abgesagt",
                 body=(
                     f"Hallo {slot.patient_snapshot.first_name},\n\n"
-                    f"Ihr Termin bei {(clinic.name if clinic else current.clinic_id)} wurde abgesagt. Bitte buchen Sie einen neuen Termin."
+                    f"Ihr Termin bei {(facility.name if facility else current.facility_id)} wurde abgesagt. Bitte buchen Sie einen neuen Termin."
                 ),
             )
     return cancelled
@@ -639,15 +809,15 @@ async def cancel_clinic_slot(
     "/medical/bookings",
     response_model=list[schemas.ClinicBooking],
 )
-async def list_clinic_bookings(
+async def list_facility_bookings(
     current: UserAccount = Depends(get_current_account),
     repository: AppointmentRepository = Depends(get_repository),
 ) -> list[schemas.ClinicBooking]:
     require_roles(current, [schemas.UserRole.clinic_admin, schemas.UserRole.provider])
-    if current.clinic_id is None:
-        raise HTTPException(status_code=403, detail="Clinic context missing for account")
+    if current.facility_id is None:
+        raise HTTPException(status_code=403, detail="Kontext der Einrichtung fehlt")
     bookings: list[schemas.ClinicBooking] = []
-    for slot in repository.clinic_slots(current.clinic_id):
+    for slot in repository.facility_slots(current.facility_id):
         if slot.status == schemas.SlotStatus.booked:
             bookings.append(
                 schemas.ClinicBooking(slot=slot, patient=slot.patient_snapshot)
@@ -661,20 +831,55 @@ async def list_clinic_bookings(
 )
 async def list_providers(
     current: UserAccount = Depends(get_current_account),
-    users: UserDirectory = Depends(get_user_directory),
+    repository: AppointmentRepository = Depends(get_repository),
 ) -> list[schemas.ProviderProfile]:
     require_roles(current, [schemas.UserRole.clinic_admin])
-    if current.clinic_id is None:
-        raise HTTPException(status_code=403, detail="Clinic context missing for account")
-    return [
-        schemas.ProviderProfile(
-            id=provider.id,
-            display_name=provider.display_name,
-            email=provider.email,
-            specialty=provider.specialty or schemas.Specialty.general_practice,
+    if current.facility_id is None:
+        raise HTTPException(status_code=403, detail="Kontext der Einrichtung fehlt")
+    facility = repository.get_facility(current.facility_id)
+    if facility is None:
+        raise HTTPException(status_code=404, detail="Einrichtung nicht gefunden")
+    return facility.providers
+
+
+@app.get("/medical/facility", response_model=schemas.FacilityDetail)
+async def get_facility_profile(
+    current: UserAccount = Depends(get_current_account),
+    repository: AppointmentRepository = Depends(get_repository),
+) -> schemas.FacilityDetail:
+    require_roles(current, [schemas.UserRole.clinic_admin, schemas.UserRole.provider])
+    if current.facility_id is None:
+        raise HTTPException(status_code=403, detail="Kontext der Einrichtung fehlt")
+    facility = repository.get_facility(current.facility_id)
+    if facility is None:
+        raise HTTPException(status_code=404, detail="Einrichtung nicht gefunden")
+    return facility
+
+
+@app.patch("/medical/facility", response_model=schemas.FacilityDetail)
+async def update_facility_profile(
+    payload: schemas.FacilityUpdate,
+    current: UserAccount = Depends(get_current_account),
+    repository: AppointmentRepository = Depends(get_repository),
+) -> schemas.FacilityDetail:
+    require_roles(current, [schemas.UserRole.clinic_admin])
+    if current.facility_id is None:
+        raise HTTPException(status_code=403, detail="Kontext der Einrichtung fehlt")
+    try:
+        updated = repository.update_facility(
+            current.facility_id,
+            contact_email=payload.contact_email,
+            phone_number=payload.phone_number,
+            street=payload.street,
+            city=payload.city,
+            postal_code=payload.postal_code,
+            specialties=payload.specialties,
+            opening_hours=payload.opening_hours,
+            owners=payload.owners,
         )
-        for provider in users.list_providers(current.clinic_id)
-    ]
+    except ValueError as error:
+        raise HTTPException(status_code=404, detail=str(error))
+    return updated
 
 
 @app.post("/patients/{patient_id}/notes", response_model=schemas.PatientRecord)
@@ -692,9 +897,9 @@ async def add_treatment_note(
     if record is None:
         raise HTTPException(status_code=404, detail="Patient record not found")
 
-    if current.clinic_id is None:
-        raise HTTPException(status_code=403, detail="Clinic context missing for account")
-    if current.clinic_id not in record.consents:
+    if current.facility_id is None:
+        raise HTTPException(status_code=403, detail="Kontext der Einrichtung fehlt")
+    if current.facility_id not in record.consents:
         raise HTTPException(status_code=403, detail="Access not granted by patient")
 
     next_version = (record.treatment_notes[-1].version + 1) if record.treatment_notes else 1
@@ -713,13 +918,13 @@ async def add_treatment_note(
         patient_id,
         str(note.version),
         note.summary,
-        current.clinic_id,
+        current.facility_id,
         event_timestamp.isoformat(),
     )
     audit_logger.append(
         schemas.AuditEvent(
             id=str(uuid4()),
-            actor=current.clinic_id,
+            actor=current.facility_id,
             action="add_treatment_note",
             patient_id=patient_id,
             timestamp=event_timestamp,
@@ -739,7 +944,7 @@ async def update_consent(
     audit_logger: AuditLogger = Depends(get_audit_logger),
     registry: AccessRegistry = Depends(get_access_registry),
 ) -> schemas.ShareStatus:
-    """Grant or revoke consent for a clinic to access the patient's record."""
+    """Grant or revoke consent for a facility to access the patient's record."""
 
     require_roles(current, [schemas.UserRole.patient])
     if current.id != patient_id:
@@ -756,18 +961,20 @@ async def update_consent(
         )
 
     if payload.grant:
-        if payload.requester_clinic_id not in record.consents:
-            record.consents.append(payload.requester_clinic_id)
+        if payload.requester_facility_id not in record.consents:
+            record.consents.append(payload.requester_facility_id)
     else:
         record.consents = [
-            clinic_id for clinic_id in record.consents if clinic_id != payload.requester_clinic_id
+            facility_id
+            for facility_id in record.consents
+            if facility_id != payload.requester_facility_id
         ]
     vault.store(record)
 
     registry.record(
         PatientAccessRequest(
             patient_id=patient_id,
-            clinic_id=payload.requester_clinic_id,
+            facility_id=payload.requester_facility_id,
             timestamp=datetime.utcnow(),
         )
     )
@@ -775,7 +982,7 @@ async def update_consent(
     event_timestamp = datetime.utcnow()
     payload_hash = stable_hash(
         patient_id,
-        payload.requester_clinic_id,
+        payload.requester_facility_id,
         str(payload.grant),
         event_timestamp.isoformat(),
     )
@@ -791,7 +998,7 @@ async def update_consent(
     )
 
     return schemas.ShareStatus(
-        clinic_id=payload.requester_clinic_id,
+        facility_id=payload.requester_facility_id,
         granted=payload.grant,
         updated_at=datetime.utcnow(),
     )
@@ -800,9 +1007,9 @@ async def update_consent(
 @app.get("/patients/{patient_id}", response_model=schemas.PatientRecord)
 async def get_patient_record(
     patient_id: str,
-    requester_clinic_id: Optional[str] = Query(
+    requester_facility_id: Optional[str] = Query(
         None,
-        description="Clinic identifier requesting access to the patient record.",
+        description="Facility identifier requesting access to the patient record.",
     ),
     current: UserAccount = Depends(get_current_account),
     vault: PatientVault = Depends(get_vault),
@@ -820,25 +1027,25 @@ async def get_patient_record(
         if current.id != patient_id:
             raise HTTPException(status_code=403, detail="Zugriff verweigert")
     elif current.role in (schemas.UserRole.clinic_admin, schemas.UserRole.provider):
-        if current.clinic_id is None:
-            raise HTTPException(status_code=403, detail="Clinic context missing for account")
-        if requester_clinic_id is None:
-            requester_clinic_id = current.clinic_id
-        if requester_clinic_id != current.clinic_id:
-            raise HTTPException(status_code=403, detail="Clinic context mismatch")
-        if requester_clinic_id not in record.consents:
+        if current.facility_id is None:
+            raise HTTPException(status_code=403, detail="Kontext der Einrichtung fehlt")
+        if requester_facility_id is None:
+            requester_facility_id = current.facility_id
+        if requester_facility_id != current.facility_id:
+            raise HTTPException(status_code=403, detail="Kontext der Einrichtung stimmt nicht überein")
+        if requester_facility_id not in record.consents:
             raise HTTPException(status_code=403, detail="Access not granted by patient")
-        event_actor = requester_clinic_id
+        event_actor = requester_facility_id
     elif current.role == schemas.UserRole.platform_admin:
-        if requester_clinic_id is None:
-            requester_clinic_id = current.id
+        if requester_facility_id is None:
+            requester_facility_id = current.id
     else:
         raise HTTPException(status_code=403, detail="Role not authorised for patient records")
 
     event_timestamp = datetime.utcnow()
     payload_hash = stable_hash(
         patient_id,
-        requester_clinic_id or current.id,
+        requester_facility_id or current.id,
         event_timestamp.isoformat(),
     )
     audit_logger.append(

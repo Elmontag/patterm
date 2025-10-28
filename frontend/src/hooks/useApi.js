@@ -36,7 +36,13 @@ const extractData = async (promise) => {
   return data;
 };
 
-export const getClinics = async () => extractData(client.get("/clinics"));
+export const getFacilities = async (params = {}) =>
+  extractData(client.get("/facilities", { params }));
+
+export const getFacilityDetail = async (facilityId) =>
+  extractData(client.get(`/facilities/${facilityId}`));
+
+export const getClinics = async () => getFacilities({ facility_type: "clinic" });
 
 export const searchAppointments = async (params) =>
   extractData(client.get("/appointments/search", { params }));
@@ -47,6 +53,9 @@ export const registerPatient = async (payload) =>
 export const login = async (payload) => extractData(client.post("/auth/login", payload));
 
 export const fetchProfile = async () => extractData(client.get("/auth/profile"));
+
+export const updateProfile = async (payload) =>
+  extractData(client.patch("/auth/profile", payload));
 
 export const registerClinic = async (payload) =>
   extractData(client.post("/auth/register/clinic", payload));
@@ -67,10 +76,10 @@ export const reschedulePatientAppointment = async ({ slotId, newSlotId }) =>
     client.post(`/patient/appointments/${slotId}/reschedule`, { new_slot_id: newSlotId })
   );
 
-export const updateConsent = async ({ patientId, requesterClinicId, grant }) =>
+export const updateConsent = async ({ patientId, requesterFacilityId, grant }) =>
   extractData(
     client.post(`/patients/${patientId}/consents`, {
-      requester_clinic_id: requesterClinicId,
+      requester_facility_id: requesterFacilityId,
       grant
     })
   );
@@ -78,7 +87,7 @@ export const updateConsent = async ({ patientId, requesterClinicId, grant }) =>
 export const fetchPatientRecordForClinic = async ({ patientId, clinicId }) =>
   extractData(
     client.get(`/patients/${patientId}`, {
-      params: { requester_clinic_id: clinicId }
+      params: { requester_facility_id: clinicId }
     })
   );
 
@@ -96,3 +105,11 @@ export const cancelClinicSlot = async (slotId) =>
 export const getClinicBookings = async () => extractData(client.get("/medical/bookings"));
 
 export const getClinicProviders = async () => extractData(client.get("/medical/providers"));
+
+export const getFacilityProfile = async () => extractData(client.get("/medical/facility"));
+
+export const updateFacilityProfile = async (payload) =>
+  extractData(client.patch("/medical/facility", payload));
+
+export const searchFacilities = async (params) =>
+  extractData(client.get("/facilities/search", { params }));

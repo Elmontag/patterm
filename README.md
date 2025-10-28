@@ -59,14 +59,41 @@ Die Dienste laufen anschließend unter folgenden Endpunkten:
 Möchten Sie einen anderen Endpunkt verwenden, können `VITE_API_URL` oder `VITE_API_PORT` in der
 `docker-compose.yml` oder über `docker compose run -e VITE_API_URL=…` gesetzt werden.
 
+## Einrichtungsmodell & Termin-Suche
+
+Patterm unterscheidet drei Einrichtungstypen, die jeweils konsistent über die API angesprochen werden:
+
+- **Kliniken** besitzen Fachbereiche. Jeder Fachbereich verwaltet seine Behandler:innenliste und stellt Slots
+  gesammelt pro Fachbereich dar.
+- **Praxen** bündeln Einzelpraxen mit einem oder mehreren Behandler:innen. Die Fachgebiete ergeben sich aus den
+  hinterlegten Ärzt:innenprofilen.
+- **Gemeinschaftspraxen** funktionieren wie Praxen, erfordern jedoch mehrere Eigentümer:innen für eine transparente
+  Verantwortlichkeit.
+
+Alle Einrichtungen führen Öffnungszeiten, Telefonnummern sowie Kontakt-E-Mails. Bei neuen Registrierungen vergibt das
+System eindeutige IDs, Praxis- und Klinikadmins können Stammdaten sowie Eigentümer:innen per `PATCH /medical/facility`
+anpassen.
+
+Patient:innen suchen in der Oberfläche nach PLZ, Stadt, Einrichtungstyp, Fachrichtung, Fachbereich und Behandler:in.
+Die zugrunde liegenden API-Endpunkte stehen ebenfalls extern zur Verfügung:
+
+- `GET /facilities` – Liste aller Einrichtungen (optional gefiltert nach Typ)
+- `GET /facilities/{id}` – Vollständige Detailansicht inklusive Fachbereichen, Öffnungszeiten und Behandler:innen
+- `GET /facilities/search` – Standort- und fachbasierte Suche inkl. nächster verfügbarer Slots
+- `GET /appointments/search` – Terminliste mit optionalen Filtern für Einrichtung, Fachrichtung, Fachbereich und
+  Behandler:in
+
+Das Patient:innenprofil speichert neben Name und Geburtsdatum nun auch eine Telefonnummer, sodass medizinische Teams bei
+Einwilligung direkt Kontakt aufnehmen können.
+
 ## Rollen, Authentifizierung und Workflows
 
 Die Anwendung stellt mehrere fein granulare Rollen bereit:
 
 - **Patient:innen** registrieren sich frei, buchen und verschieben Termine, verwalten Freigaben und sehen
   Behandlungsnotizen im persönlichen Dashboard (`/patient`).
-- **Clinic Admins** werden von der Plattformadministration angelegt, pflegen Slots, verwalten Behandler:innen und
-  rufen Patientenakten ihrer Klinik ab (`/medical`).
+- **Clinic Admins** (einschließlich Praxis- und Gemeinschaftspraxis-Admins) werden von der Plattformadministration
+  angelegt, pflegen Slots, verwalten Behandler:innen und rufen Patientenakten ihrer Einrichtung ab (`/medical`).
 - **Behandler:innen** erhalten ihre Zugänge durch die Klinikverwaltung und sehen ausschließlich medizinische
   Arbeitsansichten mit Slotsteuerung und Konsultationsakten.
 - **Platform Admin** kann neue Praxen/Kliniken registrieren und initiale Clinic-Admins provisionieren.
