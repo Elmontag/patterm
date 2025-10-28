@@ -212,6 +212,15 @@ export default function App() {
     [cacheFacilityDetail, facilityDetailCache]
   );
 
+  const filteredFacilities = useMemo(() => {
+    if (!searchFilters.facilityType) {
+      return facilitySummaries;
+    }
+    return facilitySummaries.filter(
+      (facility) => facility.facility_type === searchFilters.facilityType
+    );
+  }, [facilitySummaries, searchFilters.facilityType]);
+
   useEffect(() => {
     if (filteredFacilities.length > 0 && !searchFilters.facilityId) {
       const initial = filteredFacilities[0];
@@ -273,15 +282,6 @@ export default function App() {
     }
     return map;
   }, [facilitySummaries, facilityDetailCache, facilityResults, facilityProfile]);
-
-  const filteredFacilities = useMemo(() => {
-    if (!searchFilters.facilityType) {
-      return facilitySummaries;
-    }
-    return facilitySummaries.filter(
-      (facility) => facility.facility_type === searchFilters.facilityType
-    );
-  }, [facilitySummaries, searchFilters.facilityType]);
 
   const selectedFacility = searchFilters.facilityId
     ? facilityLookup.get(searchFilters.facilityId)
