@@ -127,7 +127,7 @@ def default_dataset() -> AppointmentDataset:
         schemas.ClinicDepartment(
             id="dep-cardio-berlin",
             name="Kardiologie",
-            specialties=[schemas.Specialty.cardiology],
+            specialties=['cardiology'],
             provider_ids=["prov-schmidt", "prov-omer"],
         )
     ]
@@ -135,7 +135,7 @@ def default_dataset() -> AppointmentDataset:
         schemas.ClinicDepartment(
             id="dep-derma-hamburg",
             name="Dermatologie",
-            specialties=[schemas.Specialty.dermatology],
+            specialties=['dermatology'],
             provider_ids=["prov-lu", "prov-isa"],
         )
     ]
@@ -144,7 +144,7 @@ def default_dataset() -> AppointmentDataset:
             id="prov-adler",
             display_name="Dr. Jana Adler",
             email="adler@citypraxis.de",
-            specialties=[schemas.Specialty.general_practice, schemas.Specialty.pediatrics],
+            specialties=['general_practice', 'pediatrics'],
             facility_id="p-berlin-city",
             department_id=None,
         ),
@@ -152,7 +152,7 @@ def default_dataset() -> AppointmentDataset:
             id="prov-kaya",
             display_name="Dr. Mehmet Kaya",
             email="kaya@citypraxis.de",
-            specialties=[schemas.Specialty.general_practice],
+            specialties=['general_practice'],
             facility_id="p-berlin-city",
             department_id=None,
         ),
@@ -162,7 +162,7 @@ def default_dataset() -> AppointmentDataset:
             id="prov-wagner",
             display_name="Dr. Leonie Wagner",
             email="wagner@medplus.de",
-            specialties=[schemas.Specialty.orthopedics],
+            specialties=['orthopedics'],
             facility_id="gp-hamburg-medplus",
             department_id=None,
         ),
@@ -170,7 +170,7 @@ def default_dataset() -> AppointmentDataset:
             id="prov-maier",
             display_name="Dr. Florian Maier",
             email="maier@medplus.de",
-            specialties=[schemas.Specialty.dermatology],
+            specialties=['dermatology'],
             facility_id="gp-hamburg-medplus",
             department_id=None,
         ),
@@ -181,7 +181,7 @@ def default_dataset() -> AppointmentDataset:
                 id="c-berlin-cardio",
                 name="GesundHerz Zentrum",
                 facility_type=schemas.FacilityType.clinic,
-                specialties=[schemas.Specialty.cardiology],
+                specialties=['cardiology'],
                 city="Berlin",
                 street="Friedrichstraße 12",
                 postal_code="10117",
@@ -200,7 +200,7 @@ def default_dataset() -> AppointmentDataset:
                         id="prov-schmidt",
                         display_name="Dr. Anja Schmidt",
                         email="schmidt@gesundherz.de",
-                        specialties=[schemas.Specialty.cardiology],
+                        specialties=['cardiology'],
                         facility_id="c-berlin-cardio",
                         department_id="dep-cardio-berlin",
                     ),
@@ -208,7 +208,7 @@ def default_dataset() -> AppointmentDataset:
                         id="prov-omer",
                         display_name="Dr. Selim Ömer",
                         email="omer@gesundherz.de",
-                        specialties=[schemas.Specialty.cardiology],
+                        specialties=['cardiology'],
                         facility_id="c-berlin-cardio",
                         department_id="dep-cardio-berlin",
                     ),
@@ -219,7 +219,7 @@ def default_dataset() -> AppointmentDataset:
                 id="c-hamburg-derma",
                 name="Hanse Derma Klinik",
                 facility_type=schemas.FacilityType.clinic,
-                specialties=[schemas.Specialty.dermatology],
+                specialties=['dermatology'],
                 city="Hamburg",
                 street="Jungfernstieg 5",
                 postal_code="20095",
@@ -238,7 +238,7 @@ def default_dataset() -> AppointmentDataset:
                         id="prov-lu",
                         display_name="Dr. Yilin Lu",
                         email="lu@hanse-derma.de",
-                        specialties=[schemas.Specialty.dermatology],
+                        specialties=['dermatology'],
                         facility_id="c-hamburg-derma",
                         department_id="dep-derma-hamburg",
                     ),
@@ -246,7 +246,7 @@ def default_dataset() -> AppointmentDataset:
                         id="prov-isa",
                         display_name="Dr. Isabel Richter",
                         email="richter@hanse-derma.de",
-                        specialties=[schemas.Specialty.dermatology],
+                        specialties=['dermatology'],
                         facility_id="c-hamburg-derma",
                         department_id="dep-derma-hamburg",
                     ),
@@ -257,7 +257,7 @@ def default_dataset() -> AppointmentDataset:
                 id="p-berlin-city",
                 name="City Praxis Mitte",
                 facility_type=schemas.FacilityType.practice,
-                specialties=[schemas.Specialty.general_practice, schemas.Specialty.pediatrics],
+                specialties=['general_practice', 'pediatrics'],
                 city="Berlin",
                 street="Rosenthaler Platz 3",
                 postal_code="10119",
@@ -280,8 +280,8 @@ def default_dataset() -> AppointmentDataset:
                 name="MedPlus Gemeinschaftspraxis",
                 facility_type=schemas.FacilityType.group_practice,
                 specialties=[
-                    schemas.Specialty.orthopedics,
-                    schemas.Specialty.dermatology,
+                    'orthopedics',
+                    'dermatology',
                 ],
                 city="Hamburg",
                 street="Mönckebergstraße 8",
@@ -368,11 +368,19 @@ class AppointmentRepository:
         _ensure_directory(self.path.parent)
         if not self.path.exists():
             dataset = default_dataset()
+            catalog: set[str] = set()
+            for facility in dataset.facilities:
+                catalog.update(filter(None, facility.specialties))
+                for department in facility.departments:
+                    catalog.update(filter(None, department.specialties))
+                for provider in facility.providers:
+                    catalog.update(filter(None, provider.specialties))
             payload = {
                 "facilities": [
                     facility.model_dump(mode="json") for facility in dataset.facilities
                 ],
                 "slots": [slot.model_dump(mode="json") for slot in dataset.slots],
+                "specialties": sorted(catalog),
             }
             self.path.write_text(json.dumps(payload, indent=2))
 
@@ -396,6 +404,44 @@ class AppointmentRepository:
             contact_email=facility.contact_email,
             phone_number=facility.phone_number,
         )
+
+    def list_specialties(self) -> list[str]:
+        data = self._load()
+        stored = data.get("specialties")
+        if stored:
+            return stored
+        catalog: set[str] = set()
+        for facility in self.list_facilities():
+            catalog.update(filter(None, facility.specialties))
+            for department in facility.departments:
+                catalog.update(filter(None, department.specialties))
+            for provider in facility.providers:
+                catalog.update(filter(None, provider.specialties))
+        specialties = sorted(catalog)
+        data["specialties"] = specialties
+        self._persist(data)
+        return specialties
+
+    def update_specialties(self, specialties: list[str]) -> list[str]:
+        normalised: list[str] = []
+        seen: set[str] = set()
+        for entry in specialties:
+            if entry is None:
+                continue
+            cleaned = re.sub(r"\s+", " ", entry.strip())
+            if not cleaned:
+                continue
+            key = cleaned.lower()
+            if key in seen:
+                continue
+            normalised.append(cleaned)
+            seen.add(key)
+        if not normalised:
+            raise ValueError("Mindestens eine Fachdisziplin erforderlich")
+        data = self._load()
+        data["specialties"] = normalised
+        self._persist(data)
+        return normalised
 
     def list_facilities(self) -> list[schemas.FacilityDetail]:
         data = self._load()
@@ -476,8 +522,8 @@ class AppointmentRepository:
             schemas.FacilityType.practice,
             schemas.FacilityType.group_practice,
         }:
-            seen: set[schemas.Specialty] = set()
-            ordered: list[schemas.Specialty] = []
+            seen: set[str] = set()
+            ordered: list[str] = []
             for specialty in prepared.specialties:
                 if specialty not in seen:
                     ordered.append(specialty)
@@ -502,6 +548,14 @@ class AppointmentRepository:
             facility.name, facility.city, facility.facility_type
         )
         owners = owners or []
+        if not facility.specialties:
+            raise ValueError("Mindestens eine Fachdisziplin erforderlich")
+        catalog = set(self.list_specialties())
+        missing = [spec for spec in facility.specialties if spec not in catalog]
+        if missing:
+            raise ValueError(
+                "Fachdisziplin nicht im Katalog: " + ", ".join(sorted(set(missing)))
+            )
         if (
             facility.facility_type == schemas.FacilityType.group_practice
             and len(owners) < 2
@@ -512,6 +566,14 @@ class AppointmentRepository:
         department_models: list[schemas.ClinicDepartment] = []
         if facility.facility_type == schemas.FacilityType.clinic:
             for index, department in enumerate(departments or [], start=1):
+                department_missing = [
+                    spec for spec in department.specialties if spec not in catalog
+                ]
+                if department_missing:
+                    raise ValueError(
+                        "Fachbereich enthält unbekannte Fächer: "
+                        + ", ".join(sorted(set(department_missing)))
+                    )
                 department_models.append(
                     schemas.ClinicDepartment(
                         id=f"dep-{self._slugify(department.name)}-{index}",
@@ -521,10 +583,11 @@ class AppointmentRepository:
                     )
                 )
             if not department_models:
+                default_specialty = facility.specialties[0]
                 department_models.append(
                     schemas.ClinicDepartment(
-                        id=f"dep-{self._slugify(facility.specialties[0].value)}",
-                        name=facility.specialties[0].value.replace("_", " ").title(),
+                        id=f"dep-{self._slugify(default_specialty)}",
+                        name=re.sub(r"[_-]+", " ", default_specialty).title(),
                         specialties=facility.specialties,
                         provider_ids=[],
                     )
@@ -552,12 +615,13 @@ class AppointmentRepository:
         self,
         facility_id: str,
         *,
+        name: Optional[str] = None,
         contact_email: Optional[str] = None,
         phone_number: Optional[str] = None,
         street: Optional[str] = None,
         city: Optional[str] = None,
         postal_code: Optional[str] = None,
-        specialties: Optional[list[schemas.Specialty]] = None,
+        specialties: Optional[list[str]] = None,
         opening_hours: Optional[list[schemas.OpeningHours]] = None,
         owners: Optional[list[str]] = None,
     ) -> schemas.FacilityDetail:
@@ -569,6 +633,8 @@ class AppointmentRepository:
                 break
         if updated is None:
             raise ValueError("Facility not found")
+        if name:
+            updated.name = name
         if contact_email:
             updated.contact_email = contact_email
         if phone_number:
@@ -579,7 +645,16 @@ class AppointmentRepository:
             updated.city = city
         if postal_code:
             updated.postal_code = postal_code
-        if specialties:
+        if specialties is not None:
+            if not specialties:
+                raise ValueError("Mindestens eine Fachdisziplin erforderlich")
+            catalog = set(self.list_specialties())
+            missing = [spec for spec in specialties if spec not in catalog]
+            if missing:
+                raise ValueError(
+                    "Fachdisziplin nicht im Katalog: "
+                    + ", ".join(sorted(set(missing)))
+                )
             updated.specialties = specialties
         if opening_hours is not None:
             updated.opening_hours = opening_hours
@@ -588,6 +663,20 @@ class AppointmentRepository:
         facilities[index] = updated
         self._save_facilities(facilities)
         return self._prepare_facility(updated)
+
+    def remove_facility(self, facility_id: str) -> None:
+        data = self._load()
+        facilities = data.get("facilities", [])
+        remaining = [
+            facility for facility in facilities if facility.get("id") != facility_id
+        ]
+        if len(remaining) == len(facilities):
+            raise ValueError("Facility not found")
+        data["facilities"] = remaining
+        data["slots"] = [
+            slot for slot in data.get("slots", []) if slot.get("facility_id") != facility_id
+        ]
+        self._persist(data)
 
     def _save_slots(self, slots: list[schemas.AppointmentSlot]) -> None:
         data = self._load()
@@ -621,7 +710,7 @@ class AppointmentRepository:
         facility_id: str,
         display_name: str,
         email: str,
-        specialties: list[schemas.Specialty],
+        specialties: list[str],
         department_id: Optional[str] = None,
         provider_id: Optional[str] = None,
     ) -> schemas.ProviderProfile:
@@ -634,6 +723,14 @@ class AppointmentRepository:
         if target_index is None:
             raise ValueError("Facility not found")
         facility = facilities[target_index]
+        catalog = set(self.list_specialties())
+        missing_specialties = [spec for spec in specialties if spec not in catalog]
+        if missing_specialties:
+            raise ValueError(
+                "Fachdisziplin nicht im Katalog: "
+                + ", ".join(sorted(set(missing_specialties)))
+            )
+        specialties = list(dict.fromkeys(specialties))
         provider_id = provider_id or f"provider-{uuid4().hex[:8]}"
         profile = schemas.ProviderProfile(
             id=provider_id,
@@ -686,7 +783,7 @@ class AppointmentRepository:
     def search_slots(
         self,
         *,
-        specialty: Optional[schemas.Specialty] = None,
+        specialty: Optional[str] = None,
         facility_id: Optional[str] = None,
         facility_type: Optional[schemas.FacilityType] = None,
         department_id: Optional[str] = None,
@@ -882,7 +979,7 @@ class AppointmentRepository:
         *,
         postal_code: Optional[str] = None,
         city: Optional[str] = None,
-        specialty: Optional[schemas.Specialty] = None,
+        specialty: Optional[str] = None,
         limit: int = 10,
     ) -> list[schemas.FacilitySearchResult]:
         facilities = self.list_facilities()
@@ -973,7 +1070,7 @@ class UserAccount:
     salt: str
     facility_id: Optional[str] = None
     patient_profile: Optional[schemas.PatientProfile] = None
-    specialties: Optional[list[schemas.Specialty]] = None
+    specialties: Optional[list[str]] = None
 
 
 class UserDirectory:
@@ -1022,10 +1119,7 @@ class UserDirectory:
                 schemas.PatientProfile.model_validate(raw["patient_profile"])
                 if raw.get("patient_profile")
                 else None,
-            specialties=
-                [schemas.Specialty(item) for item in raw.get("specialties", [])]
-                if raw.get("specialties")
-                else None,
+            specialties=raw.get("specialties") or None,
         )
 
     def _dump(self, account: UserAccount) -> dict:
@@ -1040,10 +1134,7 @@ class UserDirectory:
             "patient_profile": account.patient_profile.model_dump(mode="json")
             if account.patient_profile
             else None,
-            "specialties":
-                [specialty.value for specialty in account.specialties]
-                if account.specialties
-                else None,
+            "specialties": account.specialties or None,
         }
         return payload
 
@@ -1140,11 +1231,12 @@ class UserDirectory:
         email: str,
         password: str,
         display_name: str,
-        specialties: list[schemas.Specialty],
+        specialties: list[str],
         provider_id: Optional[str] = None,
     ) -> UserAccount:
         password_hash, salt = self._hash_password(password)
         identifier = provider_id or f"provider-{uuid4().hex[:8]}"
+        unique_specialties = list(dict.fromkeys(specialties)) or None
         account = UserAccount(
             id=identifier,
             email=self._normalize_email(email),
@@ -1153,7 +1245,7 @@ class UserDirectory:
             password_hash=password_hash,
             salt=salt,
             facility_id=facility_id,
-            specialties=specialties,
+            specialties=unique_specialties,
         )
         return self.add(account)
 
@@ -1194,6 +1286,16 @@ class UserDirectory:
             for user in self._all_accounts()
             if user.role == schemas.UserRole.provider and user.facility_id == facility_id
         ]
+
+    def remove_facility_accounts(self, facility_id: str) -> None:
+        data = self._load()
+        users = data.setdefault("users", [])
+        filtered = [
+            user for user in users if user.get("facility_id") != facility_id
+        ]
+        if len(filtered) != len(users):
+            data["users"] = filtered
+            self._persist(data)
 
 
 class SessionStore:

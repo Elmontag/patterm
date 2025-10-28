@@ -42,6 +42,20 @@ export const getFacilities = async (params = {}) =>
 export const getFacilityDetail = async (facilityId) =>
   extractData(client.get(`/facilities/${facilityId}`));
 
+export const getSpecialties = async () => extractData(client.get("/metadata/specialties"));
+
+export const updateSpecialtyCatalog = async (specialties) =>
+  extractData(client.put("/admin/specialties", { specialties }));
+
+export const adminListFacilities = async () => extractData(client.get("/admin/facilities"));
+
+export const adminUpdateFacility = async ({ facilityId, ...payload }) =>
+  extractData(client.patch(`/admin/facilities/${facilityId}`, payload));
+
+export const adminDeleteFacility = async (facilityId) => {
+  await client.delete(`/admin/facilities/${facilityId}`);
+};
+
 export const getClinics = async () => getFacilities({ facility_type: "clinic" });
 
 export const searchAppointments = async (params) =>

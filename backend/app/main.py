@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Optional, Sequence
 from uuid import uuid4
 
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
@@ -330,6 +330,30 @@ async def list_facilities(
     return repository.list_facility_summaries(facility_type=facility_type)
 
 
+@app.get("/metadata/specialties", response_model=list[str])
+async def list_specialties(
+    repository: AppointmentRepository = Depends(get_repository),
+) -> list[str]:
+    """Expose the current specialty catalog for clients."""
+
+    return repository.list_specialties()
+
+
+@app.put("/admin/specialties", response_model=list[str])
+async def update_specialty_catalog(
+    payload: schemas.SpecialtyCatalog,
+    current: UserAccount = Depends(get_current_account),
+    repository: AppointmentRepository = Depends(get_repository),
+) -> list[str]:
+    """Allow platform administrators to replace the specialty catalog."""
+
+    require_roles(current, [schemas.UserRole.platform_admin])
+    try:
+        return repository.update_specialties(payload.specialties)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
 @app.get("/facilities/{facility_id}", response_model=schemas.FacilityDetail)
 async def get_facility_detail(
     facility_id: str,
@@ -341,6 +365,58 @@ async def get_facility_detail(
     if facility is None:
         raise HTTPException(status_code=404, detail="Einrichtung nicht gefunden")
     return facility
+
+
+@app.get("/admin/facilities", response_model=list[schemas.FacilityDetail])
+async def admin_list_facilities(
+    current: UserAccount = Depends(get_current_account),
+    repository: AppointmentRepository = Depends(get_repository),
+) -> list[schemas.FacilityDetail]:
+    require_roles(current, [schemas.UserRole.platform_admin])
+    return repository.list_facilities()
+
+
+@app.patch("/admin/facilities/{facility_id}", response_model=schemas.FacilityDetail)
+async def admin_update_facility(
+    facility_id: str,
+    payload: schemas.FacilityUpdate,
+    current: UserAccount = Depends(get_current_account),
+    repository: AppointmentRepository = Depends(get_repository),
+) -> schemas.FacilityDetail:
+    require_roles(current, [schemas.UserRole.platform_admin])
+    try:
+        return repository.update_facility(
+            facility_id,
+            name=payload.name,
+            contact_email=payload.contact_email,
+            phone_number=payload.phone_number,
+            street=payload.street,
+            city=payload.city,
+            postal_code=payload.postal_code,
+            specialties=payload.specialties,
+            opening_hours=payload.opening_hours,
+            owners=payload.owners,
+        )
+    except ValueError as error:
+        message = str(error)
+        status_code = 404 if "not found" in message.lower() else 400
+        raise HTTPException(status_code=status_code, detail=message) from error
+
+
+@app.delete("/admin/facilities/{facility_id}", status_code=204)
+async def admin_remove_facility(
+    facility_id: str,
+    current: UserAccount = Depends(get_current_account),
+    repository: AppointmentRepository = Depends(get_repository),
+    users: UserDirectory = Depends(get_user_directory),
+) -> Response:
+    require_roles(current, [schemas.UserRole.platform_admin])
+    try:
+        repository.remove_facility(facility_id)
+    except ValueError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    users.remove_facility_accounts(facility_id)
+    return Response(status_code=204)
 
 
 @app.get("/clinics", response_model=list[schemas.FacilitySummary])
@@ -356,7 +432,7 @@ async def list_clinics(
 
 @app.get("/appointments/search", response_model=list[schemas.AppointmentSlot])
 async def search_appointments(
-    specialty: Optional[schemas.Specialty] = None,
+    specialty: Optional[str] = None,
     facility_id: Optional[str] = None,
     facility_type: Optional[schemas.FacilityType] = None,
     department_id: Optional[str] = None,
@@ -365,8 +441,9 @@ async def search_appointments(
 ) -> list[schemas.AppointmentSlot]:
     """Search appointments by specialty and facility filters."""
 
+    specialty_filter = specialty.strip() if specialty else None
     return repository.search_slots(
-        specialty=specialty,
+        specialty=specialty_filter,
         facility_id=facility_id,
         facility_type=facility_type,
         department_id=department_id,
@@ -378,16 +455,17 @@ async def search_appointments(
 async def search_facilities(
     postal_code: Optional[str] = None,
     city: Optional[str] = None,
-    specialty: Optional[schemas.Specialty] = None,
+    specialty: Optional[str] = None,
     facility_type: Optional[schemas.FacilityType] = None,
     repository: AppointmentRepository = Depends(get_repository),
 ) -> list[schemas.FacilitySearchResult]:
     """Discover nearby facilities and their next available appointments."""
 
+    specialty_filter = specialty.strip() if specialty else None
     results = repository.search_facilities_near(
         postal_code=postal_code,
         city=city,
-        specialty=specialty,
+        specialty=specialty_filter,
     )
     if facility_type:
         results = [

@@ -3,17 +3,15 @@ from datetime import datetime, date
 from enum import Enum
 from typing import List, Optional
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field, constr
 
 
-class Specialty(str, Enum):
-    """Medical specialties supported by the MVP."""
-
-    cardiology = "cardiology"
-    dermatology = "dermatology"
-    general_practice = "general_practice"
-    orthopedics = "orthopedics"
-    pediatrics = "pediatrics"
+SpecialtyName = constr(
+    strip_whitespace=True,
+    min_length=2,
+    max_length=120,
+    pattern=r"^[A-Za-z0-9äöüÄÖÜß\s,_-]+$",
+)
 
 
 class FacilityType(str, Enum):
@@ -43,7 +41,7 @@ class ClinicDepartment(BaseModel):
 
     id: str
     name: str
-    specialties: List[Specialty]
+    specialties: List[SpecialtyName]
     provider_ids: List[str] = Field(default_factory=list)
     providers: List["ProviderProfile"] = Field(
         default_factory=list,
@@ -57,7 +55,7 @@ class FacilitySummary(BaseModel):
     id: str = Field(..., description="Stable identifier of the facility")
     name: str
     facility_type: FacilityType
-    specialties: List[Specialty]
+    specialties: List[SpecialtyName]
     city: str
     street: str
     postal_code: str
@@ -70,7 +68,7 @@ class FacilityCreate(BaseModel):
 
     name: str
     facility_type: FacilityType
-    specialties: List[Specialty]
+    specialties: List[SpecialtyName]
     city: str
     street: str
     postal_code: str
@@ -264,7 +262,7 @@ class DepartmentCreate(BaseModel):
     """Incoming department definition."""
 
     name: str
-    specialties: List[Specialty]
+    specialties: List[SpecialtyName]
 
 
 class FacilityRegistration(BaseModel):
@@ -293,7 +291,7 @@ class ProviderRegistration(BaseModel):
     email: EmailStr
     password: str
     display_name: str
-    specialties: List[Specialty]
+    specialties: List[SpecialtyName]
 
 
 class SlotCreationRequest(BaseModel):
@@ -328,7 +326,7 @@ class ProviderProfile(BaseModel):
     id: str
     display_name: str
     email: EmailStr
-    specialties: List[Specialty]
+    specialties: List[SpecialtyName]
     facility_id: str
     department_id: Optional[str] = None
 
@@ -360,14 +358,21 @@ class UserProfileUpdate(BaseModel):
 class FacilityUpdate(BaseModel):
     """Patch payload for updating facility metadata."""
 
+    name: Optional[str] = None
     contact_email: Optional[EmailStr] = None
     phone_number: Optional[str] = None
     street: Optional[str] = None
     city: Optional[str] = None
     postal_code: Optional[str] = None
-    specialties: Optional[List[Specialty]] = None
+    specialties: Optional[List[SpecialtyName]] = None
     opening_hours: Optional[List[OpeningHours]] = None
     owners: Optional[List[str]] = None
+
+
+class SpecialtyCatalog(BaseModel):
+    """Administrative payload to replace the specialty catalog."""
+
+    specialties: List[SpecialtyName]
 
 
 FacilityDetail.model_rebuild()
