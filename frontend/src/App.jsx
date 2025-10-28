@@ -122,6 +122,52 @@ const parseDepartments = (value) => {
     .filter((entry) => entry.name);
 };
 
+const isEmptyValue = (value) => {
+  if (Array.isArray(value)) {
+    return value.length === 0;
+  }
+  if (typeof value === "string") {
+    return value.trim().length === 0;
+  }
+  return value === undefined || value === null;
+};
+
+const validateRequiredFields = (fields) =>
+  fields
+    .filter(({ value, validator }) =>
+      validator ? !validator(value) : isEmptyValue(value)
+    )
+    .map(({ label }) => label);
+
+const formatMissingFieldsMessage = (missing) => {
+  if (missing.length === 0) return "";
+  if (missing.length === 1) {
+    return `Bitte ${missing[0]} ausfüllen.`;
+  }
+  const tail = missing[missing.length - 1];
+  const head = missing.slice(0, -1);
+  return `Bitte ${head.join(", ")} und ${tail} ausfüllen.`;
+};
+
+const isValidEmail = (value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value ?? "");
+
+const isValidPhoneNumber = (value) => /^(?:\+|\d)[\d\s()\-]{5,}$/.test(value ?? "");
+
+const parseOpeningHoursInput = (raw, { allowEmpty = true } = {}) => {
+  const text = typeof raw === "string" ? raw.trim() : "";
+  if (!text) {
+    if (allowEmpty) {
+      return { value: [] };
+    }
+    return { error: "Bitte Öffnungszeiten angeben." };
+  }
+  const parsed = parseOpeningHours(text);
+  if (parsed.length === 0) {
+    return { error: "Öffnungszeiten konnten nicht gelesen werden. Format: Mo:08:00-16:00" };
+  }
+  return { value: parsed };
+};
+
 function FooterPlaceholder() {
   return (
     <footer className="mt-16 border-t border-blue-100 bg-white/80">
@@ -340,16 +386,71 @@ export default function App() {
     if (!adminFacilitySelection || !adminFacilityForm) {
       return;
     }
+    const name = adminFacilityForm.name?.trim() ?? "";
+    const contactEmail = adminFacilityForm.contact_email?.trim() ?? "";
+    const phoneNumber = adminFacilityForm.phone_number?.trim() ?? "";
+    const street = adminFacilityForm.street?.trim() ?? "";
+    const city = adminFacilityForm.city?.trim() ?? "";
+    const postal = adminFacilityForm.postal_code?.trim() ?? "";
+    const owners = parseListInput(adminFacilityForm.owners);
+    const { value: openingHours, error: openingHoursError } = parseOpeningHoursInput(
+      adminFacilityForm.opening_hours,
+      { allowEmpty: true }
+    );
+    const missing = validateRequiredFields([
+      { label: "Name", value: name },
+      { label: "Kontakt-E-Mail", value: contactEmail },
+      { label: "Telefonnummer", value: phoneNumber },
+      { label: "Straße", value: street },
+      { label: "Stadt", value: city },
+      { label: "PLZ", value: postal },
+      {
+        label: "Fachrichtungen",
+        value: adminFacilityForm.specialties ?? [],
+        validator: (value) => Array.isArray(value) && value.length > 0,
+      },
+    ]);
+    if (missing.length > 0) {
+      setAdminFacilityFeedback(formatMissingFieldsMessage(missing));
+      return;
+    }
+    if (contactEmail && !isValidEmail(contactEmail)) {
+      setAdminFacilityFeedback("Bitte eine gültige Kontakt-E-Mail angeben.");
+      return;
+    }
+    if (phoneNumber && !isValidPhoneNumber(phoneNumber)) {
+      setAdminFacilityFeedback("Bitte eine gültige Telefonnummer angeben.");
+      return;
+    }
+    if (openingHoursError) {
+      setAdminFacilityFeedback(openingHoursError);
+      return;
+    }
+    if (
+      (adminFacilitySelection.facility_type === "practice" ||
+        adminFacilitySelection.facility_type === "group_practice") &&
+      owners.length === 0
+    ) {
+      setAdminFacilityFeedback("Bitte Eigentümer:innen hinterlegen.");
+      return;
+    }
+    if (
+      adminFacilitySelection.facility_type === "group_practice" &&
+      owners.length < 2
+    ) {
+      setAdminFacilityFeedback("Gemeinschaftspraxen benötigen mehrere Eigentümer:innen.");
+      return;
+    }
     const payload = {
-      name: adminFacilityForm.name?.trim() || undefined,
-      contact_email: adminFacilityForm.contact_email?.trim() || undefined,
-      phone_number: adminFacilityForm.phone_number?.trim() || undefined,
-      street: adminFacilityForm.street?.trim() || undefined,
-      city: adminFacilityForm.city?.trim() || undefined,
-      postal_code: adminFacilityForm.postal_code?.trim() || undefined,
+      name,
+      contact_email: contactEmail,
+      phone_number: phoneNumber,
+      street,
+      city,
+      postal_code: postal,
       specialties: adminFacilityForm.specialties,
-      opening_hours: parseOpeningHours(adminFacilityForm.opening_hours),
-      owners: parseListInput(adminFacilityForm.owners),
+      opening_hours: openingHours,
+      owners,
     };
     try {
       const updated = await adminUpdateFacility({ facilityId: adminFacilitySelection.id, ...payload });
@@ -763,14 +864,36 @@ export default function App() {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     try {
+      const contactEmail = form.get("facility_email")?.toString().trim() ?? "";
+      const phoneNumber = form.get("facility_phone")?.toString().trim() ?? "";
+      const street = form.get("facility_street")?.toString().trim() ?? "";
+      const city = form.get("facility_city")?.toString().trim() ?? "";
+      const postal = form.get("facility_postal")?.toString().trim() ?? "";
+      const owners = parseListInput(form.get("facility_owners"));
+      const { value: openingHours, error: openingHoursError } = parseOpeningHoursInput(
+        form.get("facility_hours"),
+        { allowEmpty: true }
+      );
+      if (contactEmail && !isValidEmail(contactEmail)) {
+        setFacilityMessage("Bitte eine gültige Kontakt-E-Mail angeben.");
+        return;
+      }
+      if (phoneNumber && !isValidPhoneNumber(phoneNumber)) {
+        setFacilityMessage("Bitte eine gültige Telefonnummer angeben.");
+        return;
+      }
+      if (openingHoursError) {
+        setFacilityMessage(openingHoursError);
+        return;
+      }
       await updateFacilityProfile({
-        contact_email: form.get("facility_email") || undefined,
-        phone_number: form.get("facility_phone") || undefined,
-        street: form.get("facility_street") || undefined,
-        city: form.get("facility_city") || undefined,
-        postal_code: form.get("facility_postal") || undefined,
-        opening_hours: parseOpeningHours(form.get("facility_hours")),
-        owners: parseListInput(form.get("facility_owners"))
+        contact_email: contactEmail || undefined,
+        phone_number: phoneNumber || undefined,
+        street: street || undefined,
+        city: city || undefined,
+        postal_code: postal || undefined,
+        opening_hours: openingHours,
+        owners
       });
       setFacilityMessage("Einrichtung aktualisiert.");
       await refreshMedicalData();
@@ -783,9 +906,19 @@ export default function App() {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     try {
+      const displayName = form.get("display_name")?.toString().trim() ?? "";
+      const phoneNumber = form.get("profile_phone")?.toString().trim() ?? "";
+      if (!displayName && !phoneNumber) {
+        setProfileMessage("Bitte Änderungen vor dem Speichern vornehmen.");
+        return;
+      }
+      if (phoneNumber && !isValidPhoneNumber(phoneNumber)) {
+        setProfileMessage("Bitte eine gültige Telefonnummer angeben.");
+        return;
+      }
       await updateProfile({
-        display_name: form.get("display_name") || undefined,
-        phone_number: form.get("profile_phone") || undefined
+        display_name: displayName || undefined,
+        phone_number: phoneNumber || undefined
       });
       setProfileMessage("Profil aktualisiert.");
       if (user?.role === "patient") {
@@ -827,15 +960,50 @@ export default function App() {
   const handleRegisterPatient = async (event) => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
+    const email = form.get("email")?.toString().trim() ?? "";
+    const password = form.get("password")?.toString() ?? "";
+    const firstName = form.get("first_name")?.toString().trim() ?? "";
+    const lastName = form.get("last_name")?.toString().trim() ?? "";
+    const dateOfBirth = form.get("date_of_birth")?.toString() ?? "";
+    const phoneNumber = form.get("phone_number")?.toString().trim() ?? "";
+    const missing = validateRequiredFields([
+      { label: "E-Mail-Adresse", value: email },
+      { label: "Passwort", value: password },
+      { label: "Vorname", value: firstName },
+      { label: "Nachname", value: lastName },
+      { label: "Geburtsdatum", value: dateOfBirth },
+      { label: "Telefonnummer", value: phoneNumber }
+    ]);
+    if (missing.length > 0) {
+      setAuthError(formatMissingFieldsMessage(missing));
+      return;
+    }
+    if (!isValidEmail(email)) {
+      setAuthError("Bitte eine gültige E-Mail-Adresse eingeben.");
+      return;
+    }
+    if (password.length < 8) {
+      setAuthError("Passwort muss mindestens 8 Zeichen lang sein.");
+      return;
+    }
+    if (Number.isNaN(Date.parse(dateOfBirth))) {
+      setAuthError("Bitte ein gültiges Geburtsdatum wählen.");
+      return;
+    }
+    if (!isValidPhoneNumber(phoneNumber)) {
+      setAuthError("Bitte eine gültige Telefonnummer angeben.");
+      return;
+    }
     setPendingAuth(true);
+    setAuthError("");
     try {
       const auth = await registerPatient({
-        email: form.get("email"),
-        password: form.get("password"),
-        first_name: form.get("first_name"),
-        last_name: form.get("last_name"),
-        date_of_birth: form.get("date_of_birth"),
-        phone_number: form.get("phone_number")
+        email,
+        password,
+        first_name: firstName,
+        last_name: lastName,
+        date_of_birth: dateOfBirth,
+        phone_number: phoneNumber
       });
       handleAuthSuccess(auth);
       setAuthMode("login");
@@ -850,11 +1018,26 @@ export default function App() {
   const handleLogin = async (event) => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
+    const email = form.get("email")?.toString().trim() ?? "";
+    const password = form.get("password")?.toString() ?? "";
+    const missing = validateRequiredFields([
+      { label: "E-Mail-Adresse", value: email },
+      { label: "Passwort", value: password }
+    ]);
+    if (missing.length > 0) {
+      setAuthError(formatMissingFieldsMessage(missing));
+      return;
+    }
+    if (!isValidEmail(email)) {
+      setAuthError("Bitte eine gültige E-Mail-Adresse eingeben.");
+      return;
+    }
     setPendingAuth(true);
+    setAuthError("");
     try {
       const auth = await login({
-        email: form.get("email"),
-        password: form.get("password")
+        email,
+        password
       });
       handleAuthSuccess(auth);
     } catch (error) {
@@ -866,17 +1049,35 @@ export default function App() {
 
   const handleCreateSlot = async (event) => {
     event.preventDefault();
-    setCreatingSlot(true);
     const form = new FormData(event.currentTarget);
-    const start = form.get("start");
-    const end = form.get("end");
+    const startRaw = form.get("start")?.toString() ?? "";
+    const endRaw = form.get("end")?.toString() ?? "";
     const isVirtual = form.get("is_virtual") === "on";
     const providerId = form.get("slot_provider") || (user?.role === "provider" ? user.id : "");
     const departmentId = form.get("slot_department") || undefined;
+    const missing = validateRequiredFields([
+      { label: "Beginn", value: startRaw },
+      { label: "Ende", value: endRaw }
+    ]);
+    if (missing.length > 0) {
+      setAdminFeedback(formatMissingFieldsMessage(missing));
+      return;
+    }
+    const startDate = new Date(startRaw);
+    const endDate = new Date(endRaw);
+    if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) {
+      setAdminFeedback("Bitte gültige Start- und Endzeiten auswählen.");
+      return;
+    }
+    if (endDate <= startDate) {
+      setAdminFeedback("Ende muss nach dem Beginn liegen.");
+      return;
+    }
+    setCreatingSlot(true);
     try {
       await createClinicSlot({
-        start: new Date(start).toISOString(),
-        end: new Date(end).toISOString(),
+        start: startDate.toISOString(),
+        end: endDate.toISOString(),
         is_virtual: isVirtual,
         provider_id: providerId || undefined,
         department_id: departmentId
@@ -904,21 +1105,51 @@ export default function App() {
     event.preventDefault();
     if (!editingSlotId) return;
     try {
-      await createUpdatePayload();
+      const payload = createUpdatePayload();
+      await updateClinicSlot({ slotId: editingSlotId, ...payload });
       setAdminFeedback("Slot aktualisiert.");
       setEditingSlotId(null);
       await refreshMedicalData();
     } catch (error) {
-      setAdminFeedback("Slot konnte nicht aktualisiert werden.");
+      const message = error instanceof Error ? error.message : null;
+      setAdminFeedback(message ?? "Slot konnte nicht aktualisiert werden.");
     }
   };
 
-  const createUpdatePayload = async () => {
+  const createUpdatePayload = () => {
     const payload = {};
-    if (editValues.start) payload.start = new Date(editValues.start).toISOString();
-    if (editValues.end) payload.end = new Date(editValues.end).toISOString();
+    const currentSlot = medicalSlots.find((slot) => slot.id === editingSlotId) ?? null;
+    const startValue = editValues.start?.toString().trim() ?? "";
+    const endValue = editValues.end?.toString().trim() ?? "";
+    if (startValue) {
+      const startDate = new Date(startValue);
+      if (Number.isNaN(startDate.getTime())) {
+        throw new Error("Ungültiger Startzeitpunkt.");
+      }
+      payload.start = startDate.toISOString();
+    }
+    if (endValue) {
+      const endDate = new Date(endValue);
+      if (Number.isNaN(endDate.getTime())) {
+        throw new Error("Ungültiger Endzeitpunkt.");
+      }
+      payload.end = endDate.toISOString();
+    }
+    if (payload.start && payload.end) {
+      if (new Date(payload.end) <= new Date(payload.start)) {
+        throw new Error("Ende muss nach dem Beginn liegen.");
+      }
+    } else if (payload.start && currentSlot?.end) {
+      if (new Date(currentSlot.end) <= new Date(payload.start)) {
+        throw new Error("Ende muss nach dem Beginn liegen.");
+      }
+    } else if (payload.end && currentSlot?.start) {
+      if (new Date(payload.end) <= new Date(currentSlot.start)) {
+        throw new Error("Ende muss nach dem Beginn liegen.");
+      }
+    }
     payload.is_virtual = editValues.isVirtual;
-    await updateClinicSlot({ slotId: editingSlotId, ...payload });
+    return payload;
   };
 
   const handleCancelSlot = async (slotId) => {
@@ -935,11 +1166,38 @@ export default function App() {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     try {
-      const facilityType = form.get("facility_type");
+      const facilityType = form.get("facility_type")?.toString() ?? "";
       const specialtiesRaw = form.getAll("clinic_specialties");
       const specialties = specialtiesRaw.length > 0
         ? specialtiesRaw.filter(Boolean)
         : parseListInput(form.get("clinic_specialties") ?? "");
+      const clinicName = form.get("clinic_name")?.toString().trim() ?? "";
+      const street = form.get("clinic_street")?.toString().trim() ?? "";
+      const city = form.get("clinic_city")?.toString().trim() ?? "";
+      const postal = form.get("clinic_postal")?.toString().trim() ?? "";
+      const contactEmail = form.get("clinic_email")?.toString().trim() ?? "";
+      const phone = form.get("clinic_phone")?.toString().trim() ?? "";
+      const adminEmail = form.get("admin_email")?.toString().trim() ?? "";
+      const adminPassword = form.get("admin_password")?.toString() ?? "";
+      const adminDisplay = form.get("admin_display")?.toString().trim() ?? "";
+      const owners = parseListInput(form.get("facility_owners"));
+      const required = [
+        { label: "Name", value: clinicName },
+        { label: "Einrichtungstyp", value: facilityType },
+        { label: "Straße", value: street },
+        { label: "Stadt", value: city },
+        { label: "PLZ", value: postal },
+        { label: "Kontakt-E-Mail", value: contactEmail },
+        { label: "Telefonnummer", value: phone },
+        { label: "Admin-E-Mail", value: adminEmail },
+        { label: "Admin-Passwort", value: adminPassword },
+        { label: "Admin-Anzeigename", value: adminDisplay }
+      ];
+      const missing = validateRequiredFields(required);
+      if (missing.length > 0) {
+        setAdminFeedback(formatMissingFieldsMessage(missing));
+        return;
+      }
       if (!facilityType) {
         setAdminFeedback("Bitte Einrichtungstyp auswählen.");
         return;
@@ -948,23 +1206,51 @@ export default function App() {
         setAdminFeedback("Mindestens ein Fach auswählen.");
         return;
       }
+      if (!isValidEmail(contactEmail) || !isValidEmail(adminEmail)) {
+        setAdminFeedback("Bitte gültige E-Mail-Adressen angeben.");
+        return;
+      }
+      if (!isValidPhoneNumber(phone)) {
+        setAdminFeedback("Bitte eine gültige Telefonnummer angeben.");
+        return;
+      }
+      if (adminPassword.length < 8) {
+        setAdminFeedback("Admin-Passwort muss mindestens 8 Zeichen lang sein.");
+        return;
+      }
+      if (facilityType === "group_practice" && owners.length < 2) {
+        setAdminFeedback("Gemeinschaftspraxen benötigen mehrere Eigentümer:innen.");
+        return;
+      }
+      if ((facilityType === "practice" || facilityType === "group_practice") && owners.length === 0) {
+        setAdminFeedback("Bitte Eigentümer:innen angeben.");
+        return;
+      }
+      const { value: openingHours, error: openingHoursError } = parseOpeningHoursInput(
+        form.get("clinic_hours"),
+        { allowEmpty: false }
+      );
+      if (openingHoursError) {
+        setAdminFeedback(openingHoursError);
+        return;
+      }
       const result = await registerClinic({
         facility: {
-          name: form.get("clinic_name"),
+          name: clinicName,
           facility_type: facilityType,
           specialties,
-          city: form.get("clinic_city"),
-          street: form.get("clinic_street"),
-          postal_code: form.get("clinic_postal"),
-          contact_email: form.get("clinic_email"),
-          phone_number: form.get("clinic_phone"),
-          opening_hours: parseOpeningHours(form.get("clinic_hours"))
+          city,
+          street,
+          postal_code: postal,
+          contact_email: contactEmail,
+          phone_number: phone,
+          opening_hours: openingHours
         },
         departments: parseDepartments(form.get("clinic_departments")),
-        owners: parseListInput(form.get("facility_owners")),
-        admin_email: form.get("admin_email"),
-        admin_password: form.get("admin_password"),
-        admin_display_name: form.get("admin_display")
+        owners,
+        admin_email: adminEmail,
+        admin_password: adminPassword,
+        admin_display_name: adminDisplay
       });
       setAdminFeedback(`Einrichtung erfolgreich registriert. ID: ${result.facility.id}`);
       event.currentTarget.reset();
@@ -987,6 +1273,18 @@ export default function App() {
       const specialties = specialtiesRaw.length > 0
         ? specialtiesRaw.filter(Boolean)
         : parseListInput(form.get("provider_specialties") ?? "");
+      const email = form.get("provider_email")?.toString().trim() ?? "";
+      const password = form.get("provider_password")?.toString() ?? "";
+      const displayName = form.get("provider_name")?.toString().trim() ?? "";
+      const missing = validateRequiredFields([
+        { label: "E-Mail-Adresse", value: email },
+        { label: "Passwort", value: password },
+        { label: "Anzeigename", value: displayName }
+      ]);
+      if (missing.length > 0) {
+        setProviderFeedback(formatMissingFieldsMessage(missing));
+        return;
+      }
       if (!user?.facility_id) {
         setProviderFeedback("Keine Einrichtung im Profil gefunden.");
         return;
@@ -995,11 +1293,19 @@ export default function App() {
         setProviderFeedback("Bitte mindestens ein Fach auswählen.");
         return;
       }
+      if (!isValidEmail(email)) {
+        setProviderFeedback("Bitte eine gültige E-Mail-Adresse eingeben.");
+        return;
+      }
+      if (password.length < 8) {
+        setProviderFeedback("Passwort muss mindestens 8 Zeichen lang sein.");
+        return;
+      }
       await registerProvider({
         facility_id: user.facility_id,
-        email: form.get("provider_email"),
-        password: form.get("provider_password"),
-        display_name: form.get("provider_name"),
+        email,
+        password,
+        display_name: displayName,
         specialties,
         department_id: form.get("provider_department") || undefined
       });
@@ -1014,10 +1320,14 @@ export default function App() {
 
   const handleClinicPatientLookup = async (event) => {
     event.preventDefault();
-    if (!clinicPatientId) return;
+    const trimmed = clinicPatientId.trim();
+    if (!trimmed) {
+      setClinicPatientError("Bitte eine Patienten-ID angeben.");
+      return;
+    }
     try {
       const record = await fetchPatientRecordForClinic({
-        patientId: clinicPatientId,
+        patientId: trimmed,
         clinicId: user?.facility_id ?? ""
       });
       setClinicPatientRecord(record);
