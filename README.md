@@ -53,7 +53,7 @@ docker compose down -v
 Die Dienste laufen anschließend unter folgenden Endpunkten:
 
 - Backend API: http://localhost:8000 (persistente Vault-Daten via Volume `backend-data`)
-- Frontend UI: http://localhost:5173 (greift intern auf `http://backend:8000` zu)
+- Frontend UI: http://localhost:5173 (nutzt standardmäßig `http://localhost:8000` als API-Basis)
 
 Möchten Sie eine andere API-URL verwenden, kann `VITE_API_URL` in der `docker-compose.yml` oder über
 `docker compose run -e VITE_API_URL=…` überschrieben werden.
