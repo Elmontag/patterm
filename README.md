@@ -31,8 +31,9 @@ npm install
 npm run dev
 ```
 
-Die React-Anwendung erwartet den API-Endpunkt unter `http://localhost:8000`. Dies lässt sich über die
-Umgebungsvariable `VITE_API_URL` anpassen.
+Die React-Anwendung übernimmt automatisch den Hostnamen des aufrufenden Browsers und nutzt Port `8000`
+für API-Aufrufe. Bei Bedarf lässt sich dieses Verhalten über `VITE_API_URL` (vollständige Basis-URL) oder
+`VITE_API_PORT` (nur Port-Anteil) anpassen.
 
 ## Docker-Compose-Setup
 
@@ -53,10 +54,10 @@ docker compose down -v
 Die Dienste laufen anschließend unter folgenden Endpunkten:
 
 - Backend API: http://localhost:8000 (persistente Vault-Daten via Volume `backend-data`)
-- Frontend UI: http://localhost:5173 (nutzt standardmäßig `http://localhost:8000` als API-Basis)
+- Frontend UI: http://localhost:5173 (verwendet denselben Host wie die aufrufende Seite, Standard-Port 8000)
 
-Möchten Sie eine andere API-URL verwenden, kann `VITE_API_URL` in der `docker-compose.yml` oder über
-`docker compose run -e VITE_API_URL=…` überschrieben werden.
+Möchten Sie einen anderen Endpunkt verwenden, können `VITE_API_URL` oder `VITE_API_PORT` in der
+`docker-compose.yml` oder über `docker compose run -e VITE_API_URL=…` gesetzt werden.
 
 ## Rollen, Authentifizierung und Workflows
 

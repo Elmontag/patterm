@@ -1,7 +1,23 @@
 import axios from "axios";
 
+const resolveBaseURL = () => {
+  const explicit = import.meta.env.VITE_API_URL;
+  if (explicit && explicit.trim() !== "") {
+    return explicit;
+  }
+  if (typeof window !== "undefined") {
+    const { protocol, hostname } = window.location;
+    const configuredPort = import.meta.env.VITE_API_PORT;
+    const portSegment = configuredPort && configuredPort.trim() !== ""
+      ? `:${configuredPort.trim()}`
+      : ":8000";
+    return `${protocol}//${hostname}${portSegment}`;
+  }
+  return "http://127.0.0.1:8000";
+};
+
 const client = axios.create({
-  baseURL: import.meta.env.VITE_API_URL ?? "http://localhost:8000",
+  baseURL: resolveBaseURL(),
   headers: {
     "Content-Type": "application/json"
   }
