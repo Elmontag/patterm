@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import json
+import re
 import secrets
+import unicodedata
 from dataclasses import dataclass
 from datetime import datetime
 from hashlib import pbkdf2_hmac, sha256
@@ -186,12 +188,41 @@ class AppointmentRepository:
     def get_clinic(self, clinic_id: str) -> Optional[schemas.Clinic]:
         return next((clinic for clinic in self.list_clinics() if clinic.id == clinic_id), None)
 
-    def add_clinic(self, clinic: schemas.Clinic) -> None:
+    def _slugify(self, value: str) -> str:
+        normalized = unicodedata.normalize("NFKD", value)
+        ascii_text = normalized.encode("ascii", "ignore").decode("ascii")
+        cleaned = re.sub(r"[^a-zA-Z0-9]+", "-", ascii_text).strip("-")
+        slug = cleaned.lower()
+        return slug or "clinic"
+
+    def _generate_clinic_id(self, name: str, city: str) -> str:
         data = self._load()
-        if any(existing["id"] == clinic.id for existing in data.get("clinics", [])):
-            raise ValueError("Clinic identifier already exists")
-        data.setdefault("clinics", []).append(clinic.model_dump(mode="json"))
+        existing_ids = {clinic["id"] for clinic in data.get("clinics", [])}
+        base = f"c-{self._slugify(name)}"
+        if city:
+            base = f"{base}-{self._slugify(city)}"
+        candidate = base
+        suffix = 1
+        while candidate in existing_ids:
+            suffix += 1
+            candidate = f"{base}-{suffix}"
+        return candidate
+
+    def add_clinic(self, clinic: schemas.ClinicCreate) -> schemas.Clinic:
+        data = self._load()
+        clinic_id = self._generate_clinic_id(clinic.name, clinic.city)
+        new_clinic = schemas.Clinic(
+            id=clinic_id,
+            name=clinic.name,
+            specialty=clinic.specialty,
+            city=clinic.city,
+            street=clinic.street,
+            postal_code=clinic.postal_code,
+            contact_email=clinic.contact_email,
+        )
+        data.setdefault("clinics", []).append(new_clinic.model_dump(mode="json"))
         self._persist(data)
+        return new_clinic
 
     def list_slots(self) -> list[schemas.AppointmentSlot]:
         data = self._load()
@@ -467,17 +498,25 @@ class UserDirectory:
         self._persist(data)
         return account
 
+    def _generate_patient_id(self) -> str:
+        existing_ids = {user.id for user in self._all_accounts()}
+        while True:
+            candidate = f"pat-{uuid4().hex[:10]}"
+            if candidate not in existing_ids:
+                return candidate
+
     def create_patient(self, registration: schemas.PatientRegistration) -> UserAccount:
         password_hash, salt = self._hash_password(registration.password)
+        patient_id = self._generate_patient_id()
         profile = schemas.PatientProfile(
-            id=registration.patient_id,
+            id=patient_id,
             email=registration.email,
             first_name=registration.first_name,
             last_name=registration.last_name,
             date_of_birth=registration.date_of_birth,
         )
         account = UserAccount(
-            id=registration.patient_id,
+            id=patient_id,
             email=registration.email,
             role=schemas.UserRole.patient,
             display_name=f"{registration.first_name} {registration.last_name}",

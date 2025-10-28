@@ -80,9 +80,11 @@ Nach dem ersten Start erzeugt das Backend automatisch einen Plattform-Admin:
 ### Registrierungsschritte
 
 1. **Patient:innen** wählen „Patient:innen-Registrierung“ im Landing-Formular, erhalten sofort einen Login und
-   sehen anschließend das Patientendashboard.
+   sehen anschließend das Patientendashboard. Die persönliche Patient:innen-ID wird automatisch vergeben und im
+   Dashboard angezeigt.
 2. **Platform Admin** meldet sich mit dem Standardzugang an, legt über das Admin-Dashboard neue Kliniken inkl.
-   Klinik-Admin an und teilt die Zugangsdaten aus.
+   Klinik-Admin an und teilt die Zugangsdaten aus. Die Klinik-ID generiert das System und blendet sie nach der
+   Registrierung im Portal ein.
 3. **Clinic Admin** loggt sich ein, erstellt Behandler:innenaccounts und pflegt Terminslots (erstellen, ändern,
    absagen). Bei Slotänderungen oder -absagen werden Patient:innen automatisch informiert und der Audit-Trail
    ergänzt.

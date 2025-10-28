@@ -272,7 +272,6 @@ export default function App() {
     setPendingAuth(true);
     try {
       const auth = await registerPatient({
-        patient_id: form.get("patient_id"),
         email: form.get("email"),
         password: form.get("password"),
         first_name: form.get("first_name"),
@@ -372,9 +371,8 @@ export default function App() {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
     try {
-      await registerClinic({
+      const result = await registerClinic({
         clinic: {
-          id: form.get("clinic_id"),
           name: form.get("clinic_name"),
           specialty: form.get("clinic_specialty"),
           city: form.get("clinic_city"),
@@ -386,7 +384,7 @@ export default function App() {
         admin_password: form.get("admin_password"),
         admin_display_name: form.get("admin_display")
       });
-      setAdminFeedback("Klinik erfolgreich registriert.");
+      setAdminFeedback(`Klinik erfolgreich registriert. ID: ${result.clinic.id}`);
       event.currentTarget.reset();
       const updated = await getClinics();
       setClinics(updated);
@@ -531,14 +529,9 @@ export default function App() {
                   </form>
                 ) : (
                   <form onSubmit={handleRegisterPatient} className="mt-4 grid gap-4 sm:grid-cols-2">
-                    <label className="text-sm">
-                      <span className="text-xs font-semibold uppercase text-blue-700">Patient:innen-ID</span>
-                      <input
-                        name="patient_id"
-                        required
-                        className="mt-1 w-full rounded-lg border border-blue-200 bg-white px-3 py-2"
-                      />
-                    </label>
+                    <p className="sm:col-span-2 text-xs font-medium text-blue-700">
+                      Die Plattform vergibt Ihre Patient:innen-ID automatisch und zeigt sie nach dem Login an.
+                    </p>
                     <label className="text-sm">
                       <span className="text-xs font-semibold uppercase text-blue-700">E-Mail</span>
                       <input
@@ -600,6 +593,16 @@ export default function App() {
 
         {user?.role === "patient" && (
           <section className="mx-auto max-w-6xl space-y-10">
+            <div className="rounded-3xl bg-white p-6 shadow-lg">
+              <h2 className="text-lg font-semibold text-slate-900">Mein Zugang</h2>
+              <p className="mt-1 text-sm text-slate-600">
+                Nutzen Sie diese Kennung bei Rückfragen. Nur berechtigte Stellen sehen Ihre ID.
+              </p>
+              <div className="mt-3 inline-flex items-center gap-2 rounded-xl bg-blue-50 px-4 py-2">
+                <span className="text-xs font-semibold uppercase text-blue-700">Patient:innen-ID</span>
+                <code className="text-sm font-mono text-blue-900">{user.id}</code>
+              </div>
+            </div>
             <div className="rounded-3xl bg-white p-8 shadow-lg">
               <h2 className="text-xl font-semibold text-slate-900">Termin finden</h2>
               <p className="mt-1 text-sm text-slate-600">
@@ -785,6 +788,16 @@ export default function App() {
 
         {(user?.role === "clinic_admin" || user?.role === "provider") && (
           <section className="mx-auto max-w-6xl space-y-10">
+            <div className="rounded-3xl bg-white p-6 shadow-lg">
+              <h2 className="text-lg font-semibold text-slate-900">Klinikkontext</h2>
+              <p className="mt-1 text-sm text-slate-600">
+                Diese Kennung wird in Audit-Logs und bei Patientenfreigaben verwendet.
+              </p>
+              <div className="mt-3 inline-flex items-center gap-2 rounded-xl bg-blue-50 px-4 py-2">
+                <span className="text-xs font-semibold uppercase text-blue-700">Klinik-ID</span>
+                <code className="text-sm font-mono text-blue-900">{user?.clinic_id ?? "unbekannt"}</code>
+              </div>
+            </div>
             <div className="rounded-3xl bg-white p-8 shadow-lg">
               <div className="flex items-center justify-between">
                 <h2 className="text-xl font-semibold text-slate-900">Terminverwaltung</h2>
@@ -1089,10 +1102,9 @@ export default function App() {
             <form onSubmit={handleRegisterClinic} className="mt-4 grid gap-4 md:grid-cols-2">
               <div className="space-y-3">
                 <h3 className="text-sm font-semibold uppercase text-slate-500">Klinikdaten</h3>
-                <label className="text-sm">
-                  <span className="text-xs font-semibold uppercase text-slate-500">Klinik-ID</span>
-                  <input name="clinic_id" required className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2" />
-                </label>
+                <p className="text-xs font-medium text-slate-500">
+                  Die Plattform vergibt eine Klinik-ID automatisch und blendet sie nach erfolgreicher Registrierung ein.
+                </p>
                 <label className="text-sm">
                   <span className="text-xs font-semibold uppercase text-slate-500">Name</span>
                   <input name="clinic_name" required className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2" />

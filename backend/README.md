@@ -33,7 +33,6 @@ The API docs are available at `http://127.0.0.1:8000/docs` once the server is ru
 ```bash
 # 1) Patient:innen-Registrierung
 http POST :8000/auth/register/patient \
-  patient_id=p-demo \
   email=p.demo@example.com \
   password='Sicher!123' \
   first_name=Pat \
@@ -42,6 +41,7 @@ http POST :8000/auth/register/patient \
 
 # 2) Token aus der Antwort setzen
 export TOKEN="<response.token>"
+#    Die automatisch vergebene Patient:innen-ID finden Sie unter `response.user.id`.
 
 # 3) Authentifiziert buchen (Authorization Header erforderlich)
 http POST :8000/appointments \

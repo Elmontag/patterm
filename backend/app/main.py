@@ -151,28 +151,32 @@ async def get_profile(current: UserAccount = Depends(get_current_account)) -> sc
     return to_public(current)
 
 
-@app.post("/auth/register/clinic", response_model=schemas.UserPublicProfile, status_code=201)
+@app.post(
+    "/auth/register/clinic",
+    response_model=schemas.ClinicRegistrationResponse,
+    status_code=201,
+)
 async def register_clinic(
     payload: schemas.ClinicRegistration,
     current: UserAccount = Depends(get_current_account),
     repository: AppointmentRepository = Depends(get_repository),
     users: UserDirectory = Depends(get_user_directory),
-) -> schemas.UserPublicProfile:
+) -> schemas.ClinicRegistrationResponse:
     require_roles(current, [schemas.UserRole.platform_admin])
-    try:
-        repository.add_clinic(payload.clinic)
-    except ValueError as error:
-        raise HTTPException(status_code=400, detail=str(error))
+    clinic = repository.add_clinic(payload.clinic)
     try:
         account = users.create_clinic_admin(
-            clinic_id=payload.clinic.id,
+            clinic_id=clinic.id,
             email=payload.admin_email,
             password=payload.admin_password,
             display_name=payload.admin_display_name,
         )
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error))
-    return to_public(account)
+    return schemas.ClinicRegistrationResponse(
+        clinic=clinic,
+        admin=to_public(account),
+    )
 
 
 @app.post("/auth/register/provider", response_model=schemas.ProviderProfile, status_code=201)
